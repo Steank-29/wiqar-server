@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const path = require('path');
 const connectDB = require('./config/db');
+const mongoose = require('mongoose'); // Added for database status check
 
 // Route imports
 const userRoutes = require('./routes/userRoutes');
@@ -49,7 +50,35 @@ app.use(cors({
 // Static folder for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Routes
+// =============================================
+// HEALTH CHECK ENDPOINT - For UptimeRobot
+// =============================================
+app.get('/api/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState;
+  const dbStatusMap = {
+    0: 'Disconnected',
+    1: 'Connected',
+    2: 'Connecting',
+    3: 'Disconnecting'
+  };
+  
+  res.status(200).json({ 
+    status: 'OK', 
+    message: 'WQAR Perfumes API is running',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    database: dbStatusMap[dbStatus] || 'Unknown',
+    environment: process.env.NODE_ENV || 'development',
+    memory: {
+      usage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+    }
+  });
+});
+
+// =============================================
+// YOUR ROUTES
+// =============================================
 app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/contact', contactRoutes);
@@ -58,8 +87,6 @@ app.use('/api/orders', orderRoutes);
 app.get('/', (req, res) => {
   res.send('Perfume Shop API is running...');
 });
-
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -76,4 +103,3 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
