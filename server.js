@@ -21,31 +21,30 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ CORRECT CORS CONFIGURATION - Use ONLY ONE of these options:
+// ✅ FIXED CORS CONFIGURATION
+const allowedOrigins = [
+  'http://localhost:5173',      // Vite default port
+  'http://localhost:3000',      // React default port
+  'http://localhost:8080',      // Your existing localhost
+  'https://wqar-3k5u.vercel.app', // Your frontend (removed trailing slash)
+  'https://wqar-api.onrender.com'  // Your backend itself (if needed)
+];
 
-// OPTION 1: Single origin (simplest)
 app.use(cors({
-  origin: ['http://localhost:8080', 'https://wqar-api.onrender.com', 'https://wqar-3k5u.vercel.app/'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
-
-// OR OPTION 2: Multiple origins (if you need more than one)
-// const allowedOrigins = ['http://localhost:8080', 'http://localhost:3000'];
-// app.use(cors({
-//   origin: function(origin, callback) {
-//     if (!origin) return callback(null, true);
-//     if (allowedOrigins.indexOf(origin) === -1) {
-//       const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-//       return callback(new Error(msg), false);
-//     }
-//     return callback(null, true);
-//   },
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-// }));
 
 // Static folder for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -102,4 +101,5 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`CORS enabled for origins: ${allowedOrigins.join(', ')}`);
 });
