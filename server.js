@@ -25,7 +25,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // OPTION 1: Single origin (simplest)
 app.use(cors({
-  origin: ['http://localhost:8080', 'https://wqar-api.onrender.com'],
+  origin: ['http://localhost:8080', 'https://wqar-api.onrender.com', 'https://wqar-3k5u.vercel.app/'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']

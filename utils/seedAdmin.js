@@ -20,7 +20,7 @@ const seedAdmin = async () => {
     const adminData = {
       firstName: 'Sami',
       lastName: 'Jelassi',
-      email: 'SamiJelassi@wiqar.com',
+      email: 'SamiJelassi12@wiqar.com',
       password: '123123123',
       dateOfBirth: new Date('1999-09-29'),
       gender: 'male',
