@@ -26,9 +26,9 @@ const router = express.Router();
 // ==================== PUBLIC ROUTES ====================
 router.post('/login', loginUser);
 router.post('/register', upload.single('profilePicture'), registerUser);
+router.post('/register-admin', upload.single('profilePicture'), registerUser); // Optional
 
-// ==================== PROTECTED ROUTES (Profile - MUST COME FIRST) ====================
-// These routes MUST be defined BEFORE the generic /:userId routes
+// ==================== PROTECTED ROUTES (Profile) ====================
 router.route('/profile')
   .get(protect, getUserProfile)
   .put(protect, upload.single('profilePicture'), updateUserProfile);
@@ -36,27 +36,24 @@ router.route('/profile')
 router.post('/upload-profile-picture', protect, upload.single('profilePicture'), uploadProfilePicture);
 
 // ==================== SUPER ADMIN ONLY ROUTES ====================
-// Specific routes before generic ones
-router.get('/users', protect, superAdminOnly, getAllUsers);
-router.get('/users/blocked', protect, superAdminOnly, getBlockedUsers);
+// These MUST be before any /:userId routes
+router.get('/all', protect, superAdminOnly, getAllUsers);  // Changed from /users to /all
+router.get('/blocked', protect, superAdminOnly, getBlockedUsers);
 router.get('/api-endpoints', protect, superAdminOnly, getApiEndpoints);
-router.delete('/:userId', protect, superAdminOnly, deleteUser);
 router.post('/create-admin', protect, superAdminOnly, upload.single('profilePicture'), createAdminBySuperAdmin);
 
-// Block/Unblock routes (specific)
+// Block/Unblock routes (specific userId)
 router.put('/:userId/block', protect, superAdminOnly, blockUser);
 router.put('/:userId/unblock', protect, superAdminOnly, unblockUser);
-
-// User management (specific)
 router.put('/:userId/permissions', protect, superAdminOnly, updateUserApiPermissions);
 router.put('/:userId/toggle-status', protect, superAdminOnly, toggleUserStatus);
+router.delete('/:userId', protect, superAdminOnly, deleteUser);
 
-// ==================== GENERIC USER ROUTES (MUST COME LAST) ====================
-// These catch-all routes must be defined AFTER all specific routes
+// Generic user routes (MUST BE LAST)
 router.get('/:userId', protect, superAdminOnly, getUserById);
 router.put('/:userId', protect, superAdminOnly, upload.single('profilePicture'), updateUserById);
 
-// Backward compatibility
+// Backward compatibility (optional)
 router.post('/', upload.single('profilePicture'), registerUser);
 
 module.exports = router;

@@ -19,33 +19,52 @@ const deleteOldProfilePicture = (picturePath) => {
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    const user = await User.findOne({ email }).select('+password');
-
-    if (user && (await user.matchPassword(password))) {
-      if (!user.isActive) {
-        return res.status(401).json({ message: 'Account is deactivated' });
-      }
-      
-      res.json({
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        profilePicture: user.profilePicture,
-        phoneNumber: user.phoneNumber,
-        dateOfBirth: user.dateOfBirth,
-        gender: user.gender,
-        apiPermissions: user.apiPermissions,
-        blockedApis: user.blockedApis,
-        token: user.getSignedJwtToken()
+    
+    // Add validation for required fields
+    if (!email || !password) {
+      return res.status(400).json({ 
+        message: 'Please provide email and password' 
       });
-    } else {
-      res.status(401).json({ message: 'Invalid email or password' });
     }
+    
+    const user = await User.findOne({ email }).select('+password');
+    
+    // Check if user exists and password matches
+    if (!user || !(await user.matchPassword(password))) {
+      return res.status(401).json({ 
+        message: 'Invalid email or password' 
+      });
+    }
+    
+    // Check if account is active
+    if (!user.isActive) {
+      return res.status(401).json({ 
+        message: 'Account is deactivated. Please contact support.' 
+      });
+    }
+    
+    // Send success response
+    res.json({
+      success: true,
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      profilePicture: user.profilePicture,
+      phoneNumber: user.phoneNumber,
+      dateOfBirth: user.dateOfBirth,
+      gender: user.gender,
+      apiPermissions: user.apiPermissions,
+      blockedApis: user.blockedApis,
+      token: user.getSignedJwtToken()
+    });
+    
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Login error:', error);
+    res.status(500).json({ 
+      message: 'Server error. Please try again later.' 
+    });
   }
 };
 
