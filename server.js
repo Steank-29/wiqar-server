@@ -26,7 +26,7 @@ const allowedOrigins = [
   'http://localhost:5173',      // Vite default port
   'http://localhost:3000',      // React default port
   'http://localhost:8080',      // Your existing localhost
-  'https://wqar-3k5u.vercel.app', // Your frontend (removed trailing slash)
+  'https://wqar-3k5u.vercel.app/', // Your frontend (removed trailing slash)
   'https://wqar-api.onrender.com'  // Your backend itself (if needed)
 ];
 

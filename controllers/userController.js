@@ -18,7 +18,7 @@ const deleteOldProfilePicture = (picturePath) => {
 // @access  Public
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
     
     // Add validation for required fields
     if (!email || !password) {
@@ -27,23 +27,78 @@ const loginUser = async (req, res) => {
       });
     }
     
+    // Normalize email to lowercase
+    email = email.toLowerCase().trim();
+    
+    console.log('🔍 Looking for user with email:', email);
+    
     const user = await User.findOne({ email }).select('+password');
     
-    // Check if user exists and password matches
-    if (!user || !(await user.matchPassword(password))) {
+    // TEST 1: Check if user exists (separate error)
+    if (!user) {
+      console.log('❌ User not found with email:', email);
       return res.status(401).json({ 
-        message: 'Invalid email or password' 
+        message: 'Email address not found in our system',
+        errorType: 'EMAIL_NOT_FOUND'
       });
     }
+    
+    console.log('✅ User found:', user.email);
+    console.log('🔐 Password hash in DB:', user.password ? user.password.substring(0, 20) + '...' : 'NO PASSWORD');
+    
+    // TEST 2: Check password match (separate error)
+    const isPasswordMatch = await user.matchPassword(password);
+    
+    if (!isPasswordMatch) {
+      console.log('❌ Password mismatch for user:', email);
+      console.log('   Entered password length:', password.length);
+      console.log('   Entered password:', '*'.repeat(password.length));
+      return res.status(401).json({ 
+        message: 'Incorrect password. Please try again.',
+        errorType: 'INVALID_PASSWORD'
+      });
+    }
+    
+    console.log('✅ Password matched successfully!');
     
     // Check if account is active
     if (!user.isActive) {
+      console.log('⚠️ Account is deactivated:', email);
       return res.status(401).json({ 
-        message: 'Account is deactivated. Please contact support.' 
+        message: 'Account is deactivated. Please contact support.',
+        errorType: 'ACCOUNT_INACTIVE'
       });
     }
     
+    // Check if account is blocked
+    if (user.isBlocked) {
+      // Check if block has expired
+      if (user.blockedUntil && user.blockedUntil < new Date()) {
+        // Auto-unblock if expired
+        user.isBlocked = false;
+        user.blockedUntil = null;
+        user.blockReason = null;
+        await user.save();
+        console.log('✅ Auto-unblocked expired block for user:', email);
+      } else {
+        let blockMessage = 'Account is blocked. ';
+        if (user.blockedUntil) {
+          blockMessage += `Account will be unlocked on ${user.blockedUntil.toLocaleDateString()}. `;
+        }
+        if (user.blockReason) {
+          blockMessage += `Reason: ${user.blockReason}`;
+        }
+        console.log('⚠️ Blocked login attempt:', email);
+        return res.status(401).json({ 
+          message: blockMessage,
+          errorType: 'ACCOUNT_BLOCKED'
+        });
+      }
+    }
+    
     // Send success response
+    console.log('🎉 Login successful for user:', email);
+    
     res.json({
       success: true,
       _id: user._id,
@@ -61,9 +116,10 @@ const loginUser = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('🔥 Login error:', error);
     res.status(500).json({ 
-      message: 'Server error. Please try again later.' 
+      message: 'Server error. Please try again later.',
+      errorType: 'SERVER_ERROR'
     });
   }
 };
