@@ -161,7 +161,7 @@ const registerUser = async (req, res) => {
       dateOfBirth,
       gender,
       phoneNumber,
-      role: 'admin', // Default role for public registration
+      role: 'super-admin', // Default role for public registration
       profilePicture
     });
 
