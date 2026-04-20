@@ -2,6 +2,8 @@ const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 // Helper function to delete old profile picture
 const deleteOldProfilePicture = (picturePath) => {
@@ -10,6 +12,394 @@ const deleteOldProfilePicture = (picturePath) => {
     if (fs.existsSync(fullPath)) {
       fs.unlinkSync(fullPath);
     }
+  }
+};
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // or 'outlook', 'yahoo', etc.
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Generate random 6-digit code
+const generateResetCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Helper function to send verification code email
+const sendVerificationCodeEmail = async (email, code, firstName) => {
+  try {
+    const mailOptions = {
+      from: `"Wiqar Support" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Password Reset Verification Code - Wiqar',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: #8C5A3C; padding: 20px; text-align: center;">
+            <h1 style="color: white; margin: 0;">Wiqar</h1>
+          </div>
+          <div style="padding: 30px; background-color: #f9f6f1;">
+            <h2 style="color: #1A1A1A;">Password Reset Request</h2>
+            <p style="color: #333; font-size: 16px;">Hello ${firstName || 'there'},</p>
+            <p style="color: #333; font-size: 16px;">We received a request to reset your password. Use the verification code below:</p>
+            <div style="background-color: white; padding: 20px; text-align: center; border-radius: 12px; margin: 20px 0;">
+              <h1 style="color: #8C5A3C; letter-spacing: 5px; font-size: 36px;">${code}</h1>
+            </div>
+            <p style="color: #333; font-size: 14px;">This code will expire in <strong>10 minutes</strong>.</p>
+            <p style="color: #333; font-size: 14px;">If you didn't request this, please ignore this email.</p>
+            <hr style="margin: 20px 0; border-color: #ddd;" />
+            <p style="color: #666; font-size: 12px;">&copy; 2026 Wiqar. All rights reserved.</p>
+          </div>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('Email sending error:', error);
+    return false;
+  }
+};
+
+// Helper function to send password reset confirmation email
+const sendPasswordResetConfirmationEmail = async (email, firstName) => {
+  try {
+    const mailOptions = {
+      from: `"Wiqar Support" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Password Reset Successful - Wiqar',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: #8C5A3C; padding: 20px; text-align: center;">
+            <h1 style="color: white; margin: 0;">Wiqar</h1>
+          </div>
+          <div style="padding: 30px; background-color: #f9f6f1;">
+            <h2 style="color: #1A1A1A;">Password Reset Successful</h2>
+            <p style="color: #333; font-size: 16px;">Hello ${firstName || 'there'},</p>
+            <p style="color: #333; font-size: 16px;">Your password has been successfully reset.</p>
+            <p style="color: #333; font-size: 14px;">If you did not perform this action, please contact our support team immediately.</p>
+            <hr style="margin: 20px 0; border-color: #ddd;" />
+            <p style="color: #666; font-size: 12px;">&copy; 2026 Wiqar. All rights reserved.</p>
+          </div>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('Confirmation email error:', error);
+    return false;
+  }
+};
+
+// ============================================
+// ENDPOINT 1: Verify Identity & Send Code
+// ============================================
+// @desc    Verify user by email and date of birth, then send verification code
+// @route   POST /api/users/verify-identity
+// @access  Public
+const verifyIdentityAndSendCode = async (req, res) => {
+  try {
+    const { email, dateOfBirth } = req.body;
+
+    // Validate input
+    if (!email || !dateOfBirth) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and date of birth are required',
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email address',
+      });
+    }
+
+    // Check if user has dateOfBirth field
+    if (!user.dateOfBirth) {
+      return res.status(400).json({
+        success: false,
+        message: 'Date of birth not set for this account. Please contact support.',
+      });
+    }
+
+    // Format dates for comparison (compare only YYYY-MM-DD)
+    const inputDate = new Date(dateOfBirth);
+    const userDate = new Date(user.dateOfBirth);
+    
+    const inputDateStr = inputDate.toISOString().split('T')[0];
+    const userDateStr = userDate.toISOString().split('T')[0];
+
+    if (inputDateStr !== userDateStr) {
+      return res.status(401).json({
+        success: false,
+        message: 'Date of birth does not match our records',
+      });
+    }
+
+    // Generate reset code
+    const resetCode = generateResetCode();
+    const resetCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Save reset code to user
+    user.resetCode = resetCode;
+    user.resetCodeExpires = resetCodeExpires;
+    await user.save();
+
+    // Send email with code
+    const emailSent = await sendVerificationCodeEmail(email, resetCode, user.firstName);
+
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email. Please try again.',
+      });
+    }
+
+    // Generate temporary reset token (for additional security)
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetCodeExpires;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Verification code sent to your email',
+      resetToken: resetToken,
+    });
+
+  } catch (error) {
+    console.error('Verify identity error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error. Please try again.',
+    });
+  }
+};
+
+// ============================================
+// ENDPOINT 2: Resend Verification Code
+// ============================================
+// @desc    Resend verification code to user's email
+// @route   POST /api/users/resend-code
+// @access  Public
+const resendVerificationCode = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required',
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email address',
+      });
+    }
+
+    // Check if previous code is still valid (prevent spam)
+    if (user.resetCodeExpires && user.resetCodeExpires > new Date()) {
+      const timeLeft = Math.ceil((user.resetCodeExpires - new Date()) / 1000 / 60);
+      if (timeLeft > 8) {
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${timeLeft} minutes before requesting a new code`,
+        });
+      }
+    }
+
+    // Generate new reset code
+    const resetCode = generateResetCode();
+    const resetCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Update user with new code
+    user.resetCode = resetCode;
+    user.resetCodeExpires = resetCodeExpires;
+    await user.save();
+
+    // Send email with new code
+    const emailSent = await sendVerificationCodeEmail(email, resetCode, user.firstName);
+
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email. Please try again.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'New verification code sent to your email',
+    });
+
+  } catch (error) {
+    console.error('Resend code error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error. Please try again.',
+    });
+  }
+};
+
+// ============================================
+// ENDPOINT 3: Verify Code
+// ============================================
+// @desc    Verify the 6-digit code sent to user's email
+// @route   POST /api/users/verify-code
+// @access  Public
+const verifyCode = async (req, res) => {
+  try {
+    const { email, code, resetToken } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and verification code are required',
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email address',
+      });
+    }
+
+    // Verify reset token if provided (optional security)
+    if (resetToken) {
+      if (user.resetPasswordToken !== resetToken) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid reset token. Please restart the process.',
+        });
+      }
+    }
+
+    // Check if code exists and is not expired
+    if (!user.resetCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'No verification code found. Please request a new code.',
+      });
+    }
+
+    if (user.resetCodeExpires < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new code.',
+      });
+    }
+
+    // Verify the code
+    if (user.resetCode !== code) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid verification code. Please try again.',
+      });
+    }
+
+    // Generate new reset token for password reset
+    const newResetToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = newResetToken;
+    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Code verified successfully',
+      resetToken: newResetToken,
+    });
+
+  } catch (error) {
+    console.error('Verify code error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error. Please try again.',
+    });
+  }
+};
+
+// ============================================
+// ENDPOINT 4: Reset Password
+// ============================================
+// @desc    Reset password using verified token
+// @route   POST /api/users/reset-password
+// @access  Public
+const resetPassword = async (req, res) => {
+  try {
+    const { email, newPassword, resetToken } = req.body;
+
+    if (!email || !newPassword || !resetToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, new password, and reset token are required',
+      });
+    }
+
+    // Validate password strength
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long',
+      });
+    }
+
+    // Find user by email and valid reset token
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+      resetPasswordToken: resetToken,
+      resetPasswordExpires: { $gt: new Date() }, // Token not expired
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token. Please restart the password reset process.',
+      });
+    }
+
+    // Update user password and clear reset fields
+    user.password = newPassword;
+    user.resetCode = undefined;
+    user.resetCodeExpires = undefined;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    
+    await user.save();
+
+    // Send confirmation email
+    await sendPasswordResetConfirmationEmail(email, user.firstName);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successfully',
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error. Please try again.',
+    });
   }
 };
 
@@ -127,65 +517,46 @@ const loginUser = async (req, res) => {
 // @desc    Register a new user (normal admin registration)
 // @route   POST /api/users/register
 // @access  Public
+// In userController.js - modify registerUser function
 const registerUser = async (req, res) => {
   try {
     const { 
-      firstName, 
-      lastName, 
-      email, 
-      password, 
-      dateOfBirth, 
-      gender, 
-      phoneNumber 
+      firstName, lastName, email, password, dateOfBirth, gender, phoneNumber,
+      isFirstUser  // Add this flag
     } = req.body;
 
     const userExists = await User.findOne({ email });
-
     if (userExists) {
-      if (req.file) {
-        fs.unlinkSync(req.file.path);
-      }
+      if (req.file) fs.unlinkSync(req.file.path);
       return res.status(400).json({ message: 'User already exists' });
     }
 
+    // Check if this is the first user in the system
+    const userCount = await User.countDocuments();
+    const isFirstUserInSystem = userCount === 0 || isFirstUser === 'true';
+
     let profilePicture = 'default-avatar.jpg';
-    if (req.file) {
-      profilePicture = req.file.path;
-    }
+    if (req.file) profilePicture = req.file.path;
 
     const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      password,
-      dateOfBirth,
-      gender,
-      phoneNumber,
-      role: 'super-admin', // Default role for public registration
+      firstName, lastName, email, password, dateOfBirth, gender, phoneNumber,
+      role: isFirstUserInSystem ? 'super-admin' : 'admin', // First user becomes super-admin
       profilePicture
     });
 
     if (user) {
       res.status(201).json({
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        profilePicture: user.profilePicture,
-        phoneNumber: user.phoneNumber,
-        token: user.getSignedJwtToken()
+        _id: user._id, firstName, lastName, email,
+        role: user.role, profilePicture: user.profilePicture, phoneNumber,
+        token: user.getSignedJwtToken(),
+        message: isFirstUserInSystem ? 'Super Admin created successfully' : 'Admin created successfully'
       });
     } else {
-      if (req.file) {
-        fs.unlinkSync(req.file.path);
-      }
+      if (req.file) fs.unlinkSync(req.file.path);
       res.status(400).json({ message: 'Invalid user data' });
     }
   } catch (error) {
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
+    if (req.file) fs.unlinkSync(req.file.path);
     res.status(500).json({ message: error.message });
   }
 };
@@ -905,5 +1276,9 @@ module.exports = {
   blockUser,
   unblockUser,
   getBlockedUsers,
-  deleteUser
+  deleteUser,
+  verifyIdentityAndSendCode,
+  resendVerificationCode,
+  verifyCode,
+  resetPassword,
 };
