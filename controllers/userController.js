@@ -16,7 +16,7 @@ const generateVerificationCode = () => {
 // Helper function to send verification email - with better error handling
 const sendVerificationEmail = async (email, code, firstName) => {
   // Check if email configuration exists
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.warn('⚠️ Email credentials not configured. Using console fallback.');
     console.log(`📧 [DEV] Verification code for ${email}: ${code}`);
     return; // Don't throw error, just log the code
@@ -30,14 +30,14 @@ const sendVerificationEmail = async (email, code, firstName) => {
       service: process.env.EMAIL_SERVICE || 'gmail',
       auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
+        pass: process.env.EMAIL_PASS
       }
     });
 
     const mailOptions = {
-      from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
+      from: `"WIQAR Admin" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: 'Password Reset Verification Code - WQAR Admin',
+      subject: 'Password Reset Verification Code - WIQAR Admin',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
           <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
@@ -50,7 +50,7 @@ const sendVerificationEmail = async (email, code, firstName) => {
             </p>
             
             <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-              We received a request to reset your password for your WQAR Admin account. 
+              We received a request to reset your password for your WIQAR Admin account. 
               Please use the verification code below to complete the process:
             </p>
             
