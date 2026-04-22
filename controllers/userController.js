@@ -8,73 +8,86 @@ const nodemailer = require('nodemailer');
 
 const verificationCodes = new Map(); // key: userId, value: { code, expiresAt }
 
-// Email transporter configuration
-const transporter = nodemailer.createTransport({
-  service: 'gmail', // or your email service
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
-  }
-});
-
 // Helper function to generate 6-digit verification code
 const generateVerificationCode = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Helper function to send verification email
+// Helper function to send verification email - with better error handling
 const sendVerificationEmail = async (email, code, firstName) => {
-  const mailOptions = {
-    from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Password Reset Verification Code - WQAR Admin',
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
-        <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-          <h2 style="color: #8C5A3C; font-family: 'Oswald', sans-serif; text-align: center; margin-bottom: 30px;">
-            Password Reset Request
-          </h2>
-          
-          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-            Hello ${firstName || 'there'},
-          </p>
-          
-          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-            We received a request to reset your password for your WQAR Admin account. 
-            Please use the verification code below to complete the process:
-          </p>
-          
-          <div style="background-color: #F9F6F1; border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0;">
-            <span style="font-family: monospace; font-size: 36px; font-weight: bold; color: #8C5A3C; letter-spacing: 8px;">
-              ${code}
-            </span>
+  // Check if email configuration exists
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+    console.warn('⚠️ Email credentials not configured. Using console fallback.');
+    console.log(`📧 [DEV] Verification code for ${email}: ${code}`);
+    return; // Don't throw error, just log the code
+  }
+
+  // Only require nodemailer if email credentials are configured
+  const nodemailer = require('nodemailer');
+  
+  try {
+    const transporter = nodemailer.createTransport({
+      service: process.env.EMAIL_SERVICE || 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+      }
+    });
+
+    const mailOptions = {
+      from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Password Reset Verification Code - WQAR Admin',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
+          <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+            <h2 style="color: #8C5A3C; font-family: 'Oswald', sans-serif; text-align: center; margin-bottom: 30px;">
+              Password Reset Request
+            </h2>
+            
+            <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+              Hello ${firstName || 'there'},
+            </p>
+            
+            <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+              We received a request to reset your password for your WQAR Admin account. 
+              Please use the verification code below to complete the process:
+            </p>
+            
+            <div style="background-color: #F9F6F1; border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0;">
+              <span style="font-family: monospace; font-size: 36px; font-weight: bold; color: #8C5A3C; letter-spacing: 8px;">
+                ${code}
+              </span>
+            </div>
+            
+            <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+              This code will expire in <strong>10 minutes</strong>.
+            </p>
+            
+            <p style="color: #666666; font-size: 14px; line-height: 1.6; margin-top: 30px;">
+              If you didn't request a password reset, please ignore this email or contact support 
+              if you have concerns about your account security.
+            </p>
+            
+            <hr style="border: none; border-top: 1px solid #E0E0E0; margin: 30px 0;" />
+            
+            <p style="color: #999999; font-size: 12px; text-align: center;">
+              This is an automated message, please do not reply to this email.
+            </p>
           </div>
-          
-          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-            This code will expire in <strong>10 minutes</strong>.
-          </p>
-          
-          <p style="color: #666666; font-size: 14px; line-height: 1.6; margin-top: 30px;">
-            If you didn't request a password reset, please ignore this email or contact support 
-            if you have concerns about your account security.
-          </p>
-          
-          <hr style="border: none; border-top: 1px solid #E0E0E0; margin: 30px 0;" />
-          
-          <p style="color: #999999; font-size: 12px; text-align: center;">
-            This is an automated message, please do not reply to this email.
-          </p>
         </div>
-      </div>
-    `
-  };
+      `
+    };
 
-  await transporter.sendMail(mailOptions);
+    await transporter.sendMail(mailOptions);
+    console.log('✅ Verification email sent to:', email);
+  } catch (error) {
+    console.error('❌ Failed to send email:', error.message);
+    // Log the code for development purposes
+    console.log(`📧 [DEV] Verification code for ${email}: ${code}`);
+    throw error;
+  }
 };
-
-// ============================================
-// FORGOT PASSWORD METHODS
-// ============================================
 
 // @desc    Request password reset - send verification code
 // @route   POST /api/users/forgot-password
@@ -100,18 +113,21 @@ const forgotPassword = async (req, res) => {
     
     if (!user) {
       console.log('❌ User not found with email:', normalizedEmail);
-      return res.status(404).json({ 
-        success: false,
-        message: 'No account found with this email address' 
+      // For security, don't reveal if email exists or not
+      return res.status(200).json({ 
+        success: true,
+        message: 'If an account exists with this email, a verification code has been sent.',
+        userId: null // Don't send userId if user doesn't exist
       });
     }
     
     // Check if account is active
     if (!user.isActive) {
       console.log('⚠️ Password reset attempted for inactive account:', normalizedEmail);
-      return res.status(403).json({ 
-        success: false,
-        message: 'This account is deactivated. Please contact support.' 
+      return res.status(200).json({ 
+        success: true,
+        message: 'If an account exists with this email, a verification code has been sent.',
+        userId: null
       });
     }
     
@@ -119,9 +135,10 @@ const forgotPassword = async (req, res) => {
     if (user.isBlocked) {
       if (user.blockedUntil && user.blockedUntil > new Date()) {
         console.log('⚠️ Password reset attempted for blocked account:', normalizedEmail);
-        return res.status(403).json({ 
-          success: false,
-          message: 'This account is currently blocked. Please contact support.' 
+        return res.status(200).json({ 
+          success: true,
+          message: 'If an account exists with this email, a verification code has been sent.',
+          userId: null
         });
       }
     }
@@ -138,33 +155,37 @@ const forgotPassword = async (req, res) => {
       email: normalizedEmail
     });
     
-    // Send verification email
+    // Try to send email, but don't fail if email service is down
+    let emailSent = false;
     try {
       await sendVerificationEmail(
         normalizedEmail, 
         verificationCode, 
         user.firstName
       );
-      
+      emailSent = true;
       console.log('✅ Verification code sent to:', normalizedEmail);
-      
-      res.status(200).json({
-        success: true,
-        message: 'Verification code has been sent to your email',
-        userId: user._id
-      });
-      
     } catch (emailError) {
-      console.error('❌ Failed to send verification email:', emailError);
+      console.error('⚠️ Email service error:', emailError.message);
+      // Still return success but with a different message
+      // In development, you might want to return the code
+      const isDevelopment = process.env.NODE_ENV === 'development';
       
-      // Clean up stored code if email fails
-      verificationCodes.delete(user._id.toString());
-      
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send verification email. Please try again later.'
+      return res.status(200).json({
+        success: true,
+        message: isDevelopment 
+          ? `Email service unavailable. Your verification code is: ${verificationCode}`
+          : 'Unable to send email at this time. Please try again later or contact support.',
+        userId: user._id,
+        devCode: isDevelopment ? verificationCode : undefined
       });
     }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Verification code has been sent to your email',
+      userId: user._id
+    });
     
   } catch (error) {
     console.error('🔥 Forgot password error:', error);
@@ -230,7 +251,7 @@ const resendVerificationCode = async (req, res) => {
       email: normalizedEmail
     });
     
-    // Send verification email
+    // Try to send email
     try {
       await sendVerificationEmail(
         normalizedEmail, 
@@ -246,14 +267,16 @@ const resendVerificationCode = async (req, res) => {
       });
       
     } catch (emailError) {
-      console.error('❌ Failed to send verification email:', emailError);
+      console.error('⚠️ Email service error:', emailError.message);
       
-      // Clean up stored code
-      verificationCodes.delete(userId);
+      const isDevelopment = process.env.NODE_ENV === 'development';
       
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send verification email. Please try again later.'
+      res.status(200).json({
+        success: true,
+        message: isDevelopment 
+          ? `Email service unavailable. Your new code is: ${verificationCode}`
+          : 'Unable to send email. Please try again later.',
+        devCode: isDevelopment ? verificationCode : undefined
       });
     }
     
@@ -335,7 +358,8 @@ const verifyResetCode = async (req, res) => {
       });
     }
     
-    // Create reset token (JWT that expires in 15 minutes)
+    // Create reset token
+    const jwt = require('jsonwebtoken');
     const resetToken = jwt.sign(
       { 
         userId: user._id,
@@ -387,24 +411,11 @@ const resetPassword = async (req, res) => {
         message: 'Password must be at least 6 characters long' 
       });
     }
-    
-    if (!/(?=.*[A-Z])/.test(newPassword)) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Password must contain at least one uppercase letter' 
-      });
-    }
-    
-    if (!/(?=.*[0-9])/.test(newPassword)) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Password must contain at least one number' 
-      });
-    }
 
     console.log('🔑 Resetting password for userId:', userId);
     
     // Verify reset token
+    const jwt = require('jsonwebtoken');
     let decoded;
     try {
       decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
@@ -444,77 +455,11 @@ const resetPassword = async (req, res) => {
       });
     }
     
-    // Check if email matches token
-    if (user.email !== decoded.email) {
-      console.log('❌ Token email mismatch');
-      return res.status(401).json({ 
-        success: false,
-        message: 'Invalid token for this user' 
-      });
-    }
-    
     // Update password
     user.password = newPassword;
-    
-    // Clear any block status if it was due to password issues
-    if (user.isBlocked && user.blockReason === 'Multiple failed login attempts') {
-      user.isBlocked = false;
-      user.blockedUntil = null;
-      user.blockReason = null;
-      user.blockedBy = null;
-    }
-    
-    // Add password change timestamp if you have this field
-    if (user.passwordChangedAt !== undefined) {
-      user.passwordChangedAt = new Date();
-    }
-    
     await user.save();
     
     console.log('✅ Password reset successfully for user:', user.email);
-    
-    // Send confirmation email (optional)
-    try {
-      const confirmationMailOptions = {
-        from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: 'Password Successfully Reset - WQAR Admin',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
-            <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-              <h2 style="color: #8C5A3C; font-family: 'Oswald', sans-serif; text-align: center; margin-bottom: 30px;">
-                Password Reset Successful
-              </h2>
-              
-              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-                Hello ${user.firstName},
-              </p>
-              
-              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-                Your password has been successfully reset. You can now log in to your WQAR Admin account with your new password.
-              </p>
-              
-              <div style="background-color: #F9F6F1; border-radius: 12px; padding: 20px; margin: 30px 0;">
-                <p style="color: #1A1A1A; font-size: 14px; line-height: 1.6; margin: 0;">
-                  <strong>Security Notice:</strong> If you did not initiate this password reset, 
-                  please contact our support team immediately as your account may be compromised.
-                </p>
-              </div>
-              
-              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
-                Thank you for using WQAR Admin.
-              </p>
-            </div>
-          </div>
-        `
-      };
-      
-      await transporter.sendMail(confirmationMailOptions);
-      console.log('✅ Password reset confirmation email sent');
-    } catch (emailError) {
-      console.error('⚠️ Failed to send confirmation email:', emailError);
-      // Don't fail the request if confirmation email fails
-    }
     
     res.status(200).json({
       success: true,
