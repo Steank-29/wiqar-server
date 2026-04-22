@@ -16,11 +16,7 @@ const {
   blockUser,
   unblockUser,
   getBlockedUsers,
-  deleteUser,
-  verifyIdentityAndSendCode,
-  resendVerificationCode,
-  verifyCode,
-  resetPassword,
+  deleteUser  
 } = require('../controllers/userController');
 const { protect, superAdminOnly } = require('../middleware/auth');
 const upload = require('../config/multer');
@@ -31,10 +27,6 @@ const router = express.Router();
 router.post('/login', loginUser);
 router.post('/register', upload.single('profilePicture'), registerUser);
 router.post('/register-admin', upload.single('profilePicture'), registerUser); // Optional
-router.post('/verify-identity', verifyIdentityAndSendCode);
-router.post('/resend-code', resendVerificationCode);
-router.post('/verify-code', verifyCode);
-router.post('/reset-password', resetPassword);
 
 // ==================== PROTECTED ROUTES (Profile) ====================
 router.route('/profile')

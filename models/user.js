@@ -97,18 +97,6 @@ const userSchema = new mongoose.Schema({
     country: String,
     isDefault: Boolean
   }],
-  resetPasswordToken: {
-    type: String,
-  },
-  resetPasswordExpires: {
-    type: Date,
-  },
-  resetCode: {
-    type: String,
-  },
-  resetCodeExpires: {
-    type: Date,
-  },
   createdAt: {
     type: Date,
     default: Date.now
