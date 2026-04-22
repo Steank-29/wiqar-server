@@ -16,7 +16,12 @@ const {
   blockUser,
   unblockUser,
   getBlockedUsers,
-  deleteUser  
+  deleteUser,
+  // Add the new forgot password methods
+  forgotPassword,
+  resendVerificationCode,
+  verifyResetCode,
+  resetPassword
 } = require('../controllers/userController');
 const { protect, superAdminOnly } = require('../middleware/auth');
 const upload = require('../config/multer');
@@ -24,9 +29,17 @@ const upload = require('../config/multer');
 const router = express.Router();
 
 // ==================== PUBLIC ROUTES ====================
+
+// Authentication
 router.post('/login', loginUser);
 router.post('/register', upload.single('profilePicture'), registerUser);
 router.post('/register-admin', upload.single('profilePicture'), registerUser); // Optional
+
+// Forgot Password Routes (Public)
+router.post('/forgot-password', forgotPassword);
+router.post('/resend-code', resendVerificationCode);
+router.post('/verify-reset-code', verifyResetCode);
+router.post('/reset-password', resetPassword);
 
 // ==================== PROTECTED ROUTES (Profile) ====================
 router.route('/profile')

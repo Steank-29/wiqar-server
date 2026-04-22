@@ -2,6 +2,544 @@ const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+
+
+const verificationCodes = new Map(); // key: userId, value: { code, expiresAt }
+
+// Email transporter configuration
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // or your email service
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD
+  }
+});
+
+// Helper function to generate 6-digit verification code
+const generateVerificationCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Helper function to send verification email
+const sendVerificationEmail = async (email, code, firstName) => {
+  const mailOptions = {
+    from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: 'Password Reset Verification Code - WQAR Admin',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
+        <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+          <h2 style="color: #8C5A3C; font-family: 'Oswald', sans-serif; text-align: center; margin-bottom: 30px;">
+            Password Reset Request
+          </h2>
+          
+          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+            Hello ${firstName || 'there'},
+          </p>
+          
+          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+            We received a request to reset your password for your WQAR Admin account. 
+            Please use the verification code below to complete the process:
+          </p>
+          
+          <div style="background-color: #F9F6F1; border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0;">
+            <span style="font-family: monospace; font-size: 36px; font-weight: bold; color: #8C5A3C; letter-spacing: 8px;">
+              ${code}
+            </span>
+          </div>
+          
+          <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+            This code will expire in <strong>10 minutes</strong>.
+          </p>
+          
+          <p style="color: #666666; font-size: 14px; line-height: 1.6; margin-top: 30px;">
+            If you didn't request a password reset, please ignore this email or contact support 
+            if you have concerns about your account security.
+          </p>
+          
+          <hr style="border: none; border-top: 1px solid #E0E0E0; margin: 30px 0;" />
+          
+          <p style="color: #999999; font-size: 12px; text-align: center;">
+            This is an automated message, please do not reply to this email.
+          </p>
+        </div>
+      </div>
+    `
+  };
+
+  await transporter.sendMail(mailOptions);
+};
+
+// ============================================
+// FORGOT PASSWORD METHODS
+// ============================================
+
+// @desc    Request password reset - send verification code
+// @route   POST /api/users/forgot-password
+// @access  Public
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email is required' 
+      });
+    }
+
+    // Normalize email to lowercase
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    console.log('🔍 Password reset requested for:', normalizedEmail);
+    
+    // Find user by email
+    const user = await User.findOne({ email: normalizedEmail });
+    
+    if (!user) {
+      console.log('❌ User not found with email:', normalizedEmail);
+      return res.status(404).json({ 
+        success: false,
+        message: 'No account found with this email address' 
+      });
+    }
+    
+    // Check if account is active
+    if (!user.isActive) {
+      console.log('⚠️ Password reset attempted for inactive account:', normalizedEmail);
+      return res.status(403).json({ 
+        success: false,
+        message: 'This account is deactivated. Please contact support.' 
+      });
+    }
+    
+    // Check if account is blocked
+    if (user.isBlocked) {
+      if (user.blockedUntil && user.blockedUntil > new Date()) {
+        console.log('⚠️ Password reset attempted for blocked account:', normalizedEmail);
+        return res.status(403).json({ 
+          success: false,
+          message: 'This account is currently blocked. Please contact support.' 
+        });
+      }
+    }
+    
+    // Generate verification code
+    const verificationCode = generateVerificationCode();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    
+    // Store verification code
+    verificationCodes.set(user._id.toString(), {
+      code: verificationCode,
+      expiresAt: expiresAt,
+      attempts: 0,
+      email: normalizedEmail
+    });
+    
+    // Send verification email
+    try {
+      await sendVerificationEmail(
+        normalizedEmail, 
+        verificationCode, 
+        user.firstName
+      );
+      
+      console.log('✅ Verification code sent to:', normalizedEmail);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Verification code has been sent to your email',
+        userId: user._id
+      });
+      
+    } catch (emailError) {
+      console.error('❌ Failed to send verification email:', emailError);
+      
+      // Clean up stored code if email fails
+      verificationCodes.delete(user._id.toString());
+      
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email. Please try again later.'
+      });
+    }
+    
+  } catch (error) {
+    console.error('🔥 Forgot password error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error. Please try again later.' 
+    });
+  }
+};
+
+// @desc    Resend verification code
+// @route   POST /api/users/resend-code
+// @access  Public
+const resendVerificationCode = async (req, res) => {
+  try {
+    const { email, userId } = req.body;
+
+    if (!email || !userId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email and user ID are required' 
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    console.log('🔄 Resend code requested for:', normalizedEmail);
+    
+    // Find user
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+    
+    // Check if email matches
+    if (user.email !== normalizedEmail) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email does not match user ID' 
+      });
+    }
+    
+    // Check if there's an existing code that hasn't expired
+    const existingCode = verificationCodes.get(userId);
+    if (existingCode && existingCode.expiresAt > new Date()) {
+      // Clear old code
+      verificationCodes.delete(userId);
+    }
+    
+    // Generate new verification code
+    const verificationCode = generateVerificationCode();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    
+    // Store new verification code
+    verificationCodes.set(userId, {
+      code: verificationCode,
+      expiresAt: expiresAt,
+      attempts: 0,
+      email: normalizedEmail
+    });
+    
+    // Send verification email
+    try {
+      await sendVerificationEmail(
+        normalizedEmail, 
+        verificationCode, 
+        user.firstName
+      );
+      
+      console.log('✅ New verification code sent to:', normalizedEmail);
+      
+      res.status(200).json({
+        success: true,
+        message: 'New verification code has been sent to your email'
+      });
+      
+    } catch (emailError) {
+      console.error('❌ Failed to send verification email:', emailError);
+      
+      // Clean up stored code
+      verificationCodes.delete(userId);
+      
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email. Please try again later.'
+      });
+    }
+    
+  } catch (error) {
+    console.error('🔥 Resend code error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error. Please try again later.' 
+    });
+  }
+};
+
+// @desc    Verify reset code
+// @route   POST /api/users/verify-reset-code
+// @access  Public
+const verifyResetCode = async (req, res) => {
+  try {
+    const { userId, code } = req.body;
+
+    if (!userId || !code) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'User ID and verification code are required' 
+      });
+    }
+
+    console.log('🔐 Verifying code for userId:', userId);
+    
+    // Get stored verification data
+    const storedData = verificationCodes.get(userId);
+    
+    if (!storedData) {
+      console.log('❌ No verification code found for userId:', userId);
+      return res.status(400).json({ 
+        success: false,
+        message: 'No verification code found. Please request a new one.' 
+      });
+    }
+    
+    // Check if code has expired
+    if (storedData.expiresAt < new Date()) {
+      console.log('❌ Verification code expired for userId:', userId);
+      verificationCodes.delete(userId);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Verification code has expired. Please request a new one.' 
+      });
+    }
+    
+    // Check attempts (max 5 attempts)
+    if (storedData.attempts >= 5) {
+      console.log('❌ Too many failed attempts for userId:', userId);
+      verificationCodes.delete(userId);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Too many failed attempts. Please request a new code.' 
+      });
+    }
+    
+    // Verify code
+    if (storedData.code !== code) {
+      storedData.attempts += 1;
+      verificationCodes.set(userId, storedData);
+      
+      console.log('❌ Invalid verification code for userId:', userId);
+      return res.status(400).json({ 
+        success: false,
+        message: `Invalid verification code. ${5 - storedData.attempts} attempts remaining.` 
+      });
+    }
+    
+    // Code is valid - generate reset token
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+    
+    // Create reset token (JWT that expires in 15 minutes)
+    const resetToken = jwt.sign(
+      { 
+        userId: user._id,
+        purpose: 'password-reset',
+        email: user.email 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+    
+    // Clear the verification code
+    verificationCodes.delete(userId);
+    
+    console.log('✅ Code verified successfully for user:', user.email);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Code verified successfully',
+      resetToken: resetToken
+    });
+    
+  } catch (error) {
+    console.error('🔥 Verify code error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error. Please try again later.' 
+    });
+  }
+};
+
+// @desc    Reset password with token
+// @route   POST /api/users/reset-password
+// @access  Public
+const resetPassword = async (req, res) => {
+  try {
+    const { userId, resetToken, newPassword } = req.body;
+
+    if (!userId || !resetToken || !newPassword) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'User ID, reset token, and new password are required' 
+      });
+    }
+
+    // Validate password strength
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Password must be at least 6 characters long' 
+      });
+    }
+    
+    if (!/(?=.*[A-Z])/.test(newPassword)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Password must contain at least one uppercase letter' 
+      });
+    }
+    
+    if (!/(?=.*[0-9])/.test(newPassword)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Password must contain at least one number' 
+      });
+    }
+
+    console.log('🔑 Resetting password for userId:', userId);
+    
+    // Verify reset token
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      console.log('❌ Invalid or expired reset token:', jwtError.message);
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid or expired reset token. Please request a new code.' 
+      });
+    }
+    
+    // Check if token is for password reset
+    if (decoded.purpose !== 'password-reset') {
+      console.log('❌ Token purpose mismatch');
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid token purpose' 
+      });
+    }
+    
+    // Check if userId matches
+    if (decoded.userId !== userId) {
+      console.log('❌ Token userId mismatch');
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid token for this user' 
+      });
+    }
+    
+    // Find user
+    const user = await User.findById(userId).select('+password');
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+    
+    // Check if email matches token
+    if (user.email !== decoded.email) {
+      console.log('❌ Token email mismatch');
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid token for this user' 
+      });
+    }
+    
+    // Update password
+    user.password = newPassword;
+    
+    // Clear any block status if it was due to password issues
+    if (user.isBlocked && user.blockReason === 'Multiple failed login attempts') {
+      user.isBlocked = false;
+      user.blockedUntil = null;
+      user.blockReason = null;
+      user.blockedBy = null;
+    }
+    
+    // Add password change timestamp if you have this field
+    if (user.passwordChangedAt !== undefined) {
+      user.passwordChangedAt = new Date();
+    }
+    
+    await user.save();
+    
+    console.log('✅ Password reset successfully for user:', user.email);
+    
+    // Send confirmation email (optional)
+    try {
+      const confirmationMailOptions = {
+        from: `"WQAR Admin" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: 'Password Successfully Reset - WQAR Admin',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #F9F6F1;">
+            <div style="background-color: #FFFFFF; border-radius: 20px; padding: 40px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+              <h2 style="color: #8C5A3C; font-family: 'Oswald', sans-serif; text-align: center; margin-bottom: 30px;">
+                Password Reset Successful
+              </h2>
+              
+              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+                Hello ${user.firstName},
+              </p>
+              
+              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+                Your password has been successfully reset. You can now log in to your WQAR Admin account with your new password.
+              </p>
+              
+              <div style="background-color: #F9F6F1; border-radius: 12px; padding: 20px; margin: 30px 0;">
+                <p style="color: #1A1A1A; font-size: 14px; line-height: 1.6; margin: 0;">
+                  <strong>Security Notice:</strong> If you did not initiate this password reset, 
+                  please contact our support team immediately as your account may be compromised.
+                </p>
+              </div>
+              
+              <p style="color: #1A1A1A; font-size: 16px; line-height: 1.6;">
+                Thank you for using WQAR Admin.
+              </p>
+            </div>
+          </div>
+        `
+      };
+      
+      await transporter.sendMail(confirmationMailOptions);
+      console.log('✅ Password reset confirmation email sent');
+    } catch (emailError) {
+      console.error('⚠️ Failed to send confirmation email:', emailError);
+      // Don't fail the request if confirmation email fails
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Password has been reset successfully. You can now log in with your new password.'
+    });
+    
+  } catch (error) {
+    console.error('🔥 Reset password error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error. Please try again later.' 
+    });
+  }
+};
+
+// Optional: Clean up expired verification codes periodically
+setInterval(() => {
+  const now = new Date();
+  for (const [key, value] of verificationCodes.entries()) {
+    if (value.expiresAt < now) {
+      verificationCodes.delete(key);
+      console.log('🧹 Cleaned up expired verification code for:', key);
+    }
+  }
+}, 5 * 60 * 1000); 
 
 // Helper function to delete old profile picture
 const deleteOldProfilePicture = (picturePath) => {
@@ -886,5 +1424,9 @@ module.exports = {
   blockUser,
   unblockUser,
   getBlockedUsers,
-  deleteUser
+  deleteUser,
+  forgotPassword,
+  resendVerificationCode,
+  verifyResetCode,
+  resetPassword
 };
