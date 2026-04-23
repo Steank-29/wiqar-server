@@ -29,6 +29,56 @@ const deleteSingleImage = (imagePath) => {
   }
 };
 
+// Helper function to validate and set prices
+const setProductPrices = (productData, existingProduct = null) => {
+  const prices = {
+    '30ml': 18,
+    '50ml': 25,
+    '100ml': 35
+  };
+  
+  // If prices object is provided in request
+  if (productData.prices) {
+    if (typeof productData.prices === 'string') {
+      try {
+        productData.prices = JSON.parse(productData.prices);
+      } catch (e) {
+        console.log('Failed to parse prices string');
+      }
+    }
+    
+    // Merge provided prices with defaults
+    if (productData.prices && typeof productData.prices === 'object') {
+      if (productData.prices['30ml'] !== undefined) prices['30ml'] = parseFloat(productData.prices['30ml']);
+      if (productData.prices['50ml'] !== undefined) prices['50ml'] = parseFloat(productData.prices['50ml']);
+      if (productData.prices['100ml'] !== undefined) prices['100ml'] = parseFloat(productData.prices['100ml']);
+    }
+  }
+  
+  // Handle legacy price field for backward compatibility
+  if (productData.price && !productData.prices) {
+    const legacyPrice = parseFloat(productData.price);
+    prices['30ml'] = legacyPrice;
+    // If only one price provided, approximate others
+    if (!productData.prices) {
+      prices['50ml'] = legacyPrice + 7;
+      prices['100ml'] = legacyPrice + 17;
+    }
+  }
+  
+  // Validate that discounted price is not higher than any size price
+  if (productData.discountedPrice) {
+    const discountedPrice = parseFloat(productData.discountedPrice);
+    for (const size in prices) {
+      if (discountedPrice > prices[size]) {
+        throw new Error(`Discounted price cannot be greater than ${size} price (${prices[size]})`);
+      }
+    }
+  }
+  
+  return prices;
+};
+
 // @desc    Get all products with filtering, sorting, pagination
 // @route   GET /api/products
 // @access  Public
@@ -47,7 +97,8 @@ const getProducts = async (req, res) => {
       startDate,
       endDate,
       featured,
-      category
+      category,
+      size = '30ml' // Add size parameter for price filtering
     } = req.query;
 
     // Build filter object
@@ -78,11 +129,12 @@ const getProducts = async (req, res) => {
       }
     }
 
-    // Price range filter
+    // Price range filter using new prices structure
     if (minPrice || maxPrice) {
-      filter.price = {};
-      if (minPrice) filter.price.$gte = parseFloat(minPrice);
-      if (maxPrice) filter.price.$lte = parseFloat(maxPrice);
+      const priceField = `prices.${size}`;
+      filter[priceField] = {};
+      if (minPrice) filter[priceField].$gte = parseFloat(minPrice);
+      if (maxPrice) filter[priceField].$lte = parseFloat(maxPrice);
     }
 
     // Date range filter
@@ -109,7 +161,12 @@ const getProducts = async (req, res) => {
 
     // Sorting
     const sortOrder = order === 'asc' ? 1 : -1;
-    const sort = { [sortBy]: sortOrder };
+    let sort = { [sortBy]: sortOrder };
+    
+    // Handle sorting by price for specific size
+    if (sortBy === 'price') {
+      sort = { [`prices.${size}`]: sortOrder };
+    }
 
     // Execute query
     const products = await Product.find(filter)
@@ -119,31 +176,48 @@ const getProducts = async (req, res) => {
 
     const total = await Product.countDocuments(filter);
 
-    // Get statistics
+    // Get statistics with new pricing structure
     const stats = await Product.aggregate([
       { $match: filter },
       {
         $group: {
           _id: null,
           totalProducts: { $sum: 1 },
-          totalValue: { $sum: { $ifNull: ['$discountedPrice', '$price'] } },
-          averagePrice: { $avg: '$price' },
+          totalValue30ml: { $sum: '$prices.30ml' },
+          totalValue50ml: { $sum: '$prices.50ml' },
+          totalValue100ml: { $sum: '$prices.100ml' },
+          averagePrice30ml: { $avg: '$prices.30ml' },
+          averagePrice50ml: { $avg: '$prices.50ml' },
+          averagePrice100ml: { $avg: '$prices.100ml' },
           totalStock: { $sum: '$stock' },
           lowStockCount: { $sum: { $cond: [{ $lt: ['$stock', 20] }, 1, 0] } }
         }
       }
     ]);
 
+    // Format products with pricing info
+    const formattedProducts = products.map(product => ({
+      ...product.toObject(),
+      currentPrices: product.getAllPrices(),
+      availableSizes: product.quantity
+    }));
+
     res.status(200).json({
       success: true,
-      data: products,
+      data: formattedProducts,
       pagination: {
         currentPage: pageNum,
         totalPages: Math.ceil(total / limitNum),
         totalItems: total,
         itemsPerPage: limitNum
       },
-      stats: stats[0] || {
+      stats: stats[0] ? {
+        totalProducts: stats[0].totalProducts,
+        totalValue: stats[0][`totalValue${size}`],
+        averagePrice: stats[0][`averagePrice${size}`],
+        totalStock: stats[0].totalStock,
+        lowStockCount: stats[0].lowStockCount
+      } : {
         totalProducts: 0,
         totalValue: 0,
         averagePrice: 0,
@@ -175,9 +249,18 @@ const getProductById = async (req, res) => {
       });
     }
     
+    // Format response with pricing for all sizes
+    const formattedProduct = {
+      ...product.toObject(),
+      currentPrices: product.getAllPrices(),
+      availableSizes: product.quantity,
+      // Add helper method to get price for specific size
+      getPriceForSize: (size) => product.getPriceForQuantity(size)
+    };
+    
     res.status(200).json({
       success: true,
-      data: product
+      data: formattedProduct
     });
   } catch (error) {
     console.error(error);
@@ -234,18 +317,37 @@ const createProduct = async (req, res) => {
         productData.tags = productData.tags.split(',').map(tag => tag.trim());
       }
     }
+    
+    // Handle prices
+    try {
+      productData.prices = setProductPrices(productData);
+    } catch (error) {
+      if (req.files && req.files.length > 0) {
+        req.files.forEach(file => {
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+          }
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+    
+    // Remove legacy price field if exists
+    delete productData.price;
 
-    // Handle image uploads - req.files is an array directly
+    // Handle image uploads
     if (req.files && req.files.length > 0) {
       const uploadedImages = [];
       
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
-        // Convert Windows backslashes to forward slashes for URL
         const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
-          url: relativePath, // This will be 'uploads/products/product-xxx.jpg'
-          isPrimary: i === 0 // First image is primary
+          url: relativePath,
+          isPrimary: i === 0
         });
         console.log(`Image ${i + 1} saved at: ${relativePath}`);
       }
@@ -259,12 +361,18 @@ const createProduct = async (req, res) => {
 
     const product = await Product.create(productData);
     console.log('Product created successfully with ID:', product._id);
-    console.log('Saved images in DB:', JSON.stringify(product.images, null, 2));
+    
+    // Return formatted product
+    const formattedProduct = {
+      ...product.toObject(),
+      currentPrices: product.getAllPrices(),
+      availableSizes: product.quantity
+    };
     
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
-      data: product
+      data: formattedProduct
     });
   } catch (error) {
     console.error('Error in createProduct:', error);
@@ -285,9 +393,6 @@ const createProduct = async (req, res) => {
   }
 };
 
-// @desc    Update product
-// @route   PUT /api/products/:id
-// @access  Private/Admin
 // @desc    Update product
 // @route   PUT /api/products/:id
 // @access  Private/Admin
@@ -336,9 +441,6 @@ const updateProduct = async (req, res) => {
     }
 
     // Convert string numbers to actual numbers
-    if (updateData.price) {
-      updateData.price = parseFloat(updateData.price);
-    }
     if (updateData.discountedPrice) {
       updateData.discountedPrice = parseFloat(updateData.discountedPrice);
     }
@@ -354,25 +456,46 @@ const updateProduct = async (req, res) => {
     if (updateData.featured === 'false') updateData.featured = false;
     if (updateData.inStock === 'true') updateData.inStock = true;
     if (updateData.inStock === 'false') updateData.inStock = false;
-
-    // IMPORTANT: Validate discounted price before updating
-    const originalPrice = updateData.price || product.price;
-    const discountedPrice = updateData.discountedPrice;
     
-    if (discountedPrice && discountedPrice >= originalPrice) {
-      // Delete uploaded files if validation fails
-      if (req.files && req.files.length > 0) {
-        req.files.forEach(file => {
-          if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
+    // Handle prices update
+    if (updateData.prices || updateData.price) {
+      try {
+        const existingPrices = product.prices;
+        const newPrices = setProductPrices(updateData, product);
+        
+        // Merge with existing prices if not all provided
+        updateData.prices = {
+          '30ml': updateData.prices?.['30ml'] !== undefined ? parseFloat(updateData.prices['30ml']) : newPrices['30ml'],
+          '50ml': updateData.prices?.['50ml'] !== undefined ? parseFloat(updateData.prices['50ml']) : newPrices['50ml'],
+          '100ml': updateData.prices?.['100ml'] !== undefined ? parseFloat(updateData.prices['100ml']) : newPrices['100ml']
+        };
+        
+        // Validate discounted price against all sizes
+        if (updateData.discountedPrice) {
+          const discountedPrice = parseFloat(updateData.discountedPrice);
+          for (const size in updateData.prices) {
+            if (discountedPrice > updateData.prices[size]) {
+              throw new Error(`Discounted price cannot be greater than ${size} price (${updateData.prices[size]})`);
+            }
           }
+        }
+      } catch (error) {
+        if (req.files && req.files.length > 0) {
+          req.files.forEach(file => {
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: error.message
         });
       }
-      return res.status(400).json({
-        success: false,
-        message: 'Discounted price must be less than original price'
-      });
     }
+    
+    // Remove legacy price field if exists
+    delete updateData.price;
 
     // Handle new image uploads
     if (req.files && req.files.length > 0) {
@@ -406,16 +529,23 @@ const updateProduct = async (req, res) => {
       { 
         new: true, 
         runValidators: true,
-        context: 'query' // This helps with validation
+        context: 'query'
       }
     );
     
     console.log('Product updated successfully');
     
+    // Return formatted product
+    const formattedProduct = {
+      ...product.toObject(),
+      currentPrices: product.getAllPrices(),
+      availableSizes: product.quantity
+    };
+    
     res.status(200).json({
       success: true,
       message: 'Product updated successfully',
-      data: product
+      data: formattedProduct
     });
   } catch (error) {
     console.error('Error in updateProduct:', error);
@@ -623,8 +753,12 @@ const getProductStats = async (req, res) => {
         $group: {
           _id: null,
           totalProducts: { $sum: 1 },
-          totalValue: { $sum: { $ifNull: ['$discountedPrice', '$price'] } },
-          averagePrice: { $avg: '$price' },
+          totalValue30ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.30ml'] } },
+          totalValue50ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.50ml'] } },
+          totalValue100ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.100ml'] } },
+          averagePrice30ml: { $avg: '$prices.30ml' },
+          averagePrice50ml: { $avg: '$prices.50ml' },
+          averagePrice100ml: { $avg: '$prices.100ml' },
           totalStock: { $sum: '$stock' },
           featuredCount: { $sum: { $cond: ['$featured', 1, 0] } },
           lowStockCount: { $sum: { $cond: [{ $lt: ['$stock', 20] }, 1, 0] } },
@@ -635,8 +769,12 @@ const getProductStats = async (req, res) => {
         $project: {
           _id: 0,
           totalProducts: 1,
-          totalValue: 1,
-          averagePrice: { $round: ['$averagePrice', 2] },
+          totalValue30ml: 1,
+          totalValue50ml: 1,
+          totalValue100ml: 1,
+          averagePrice30ml: { $round: ['$averagePrice30ml', 2] },
+          averagePrice50ml: { $round: ['$averagePrice50ml', 2] },
+          averagePrice100ml: { $round: ['$averagePrice100ml', 2] },
           totalStock: 1,
           featuredCount: 1,
           lowStockCount: 1,
@@ -645,13 +783,15 @@ const getProductStats = async (req, res) => {
       }
     ]);
 
-    // Get gender distribution
+    // Get gender distribution with pricing
     const genderStats = await Product.aggregate([
       {
         $group: {
           _id: '$gender',
           count: { $sum: 1 },
-          totalValue: { $sum: { $ifNull: ['$discountedPrice', '$price'] } }
+          totalValue30ml: { $sum: '$prices.30ml' },
+          totalValue50ml: { $sum: '$prices.50ml' },
+          totalValue100ml: { $sum: '$prices.100ml' }
         }
       }
     ]);
@@ -661,8 +801,12 @@ const getProductStats = async (req, res) => {
       data: {
         overview: stats[0] || {
           totalProducts: 0,
-          totalValue: 0,
-          averagePrice: 0,
+          totalValue30ml: 0,
+          totalValue50ml: 0,
+          totalValue100ml: 0,
+          averagePrice30ml: 0,
+          averagePrice50ml: 0,
+          averagePrice100ml: 0,
           totalStock: 0,
           featuredCount: 0,
           lowStockCount: 0,
@@ -714,7 +858,7 @@ const uploadProductImages = async (req, res) => {
         const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
           url: relativePath,
-          isPrimary: product.images.length === 0 && i === 0 // Make primary if no images exist
+          isPrimary: product.images.length === 0 && i === 0
         });
         console.log(`Image uploaded: ${relativePath}`);
       }
@@ -750,6 +894,52 @@ const uploadProductImages = async (req, res) => {
   }
 };
 
+// @desc    Get price for specific product size
+// @route   GET /api/products/:id/price/:size
+// @access  Public
+const getProductPriceBySize = async (req, res) => {
+  try {
+    const { id, size } = req.params;
+    
+    if (!['30ml', '50ml', '100ml'].includes(size)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid size. Must be 30ml, 50ml, or 100ml'
+      });
+    }
+    
+    const product = await Product.findById(id);
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+    
+    const price = product.getPriceForQuantity(size);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        productId: product._id,
+        name: product.name,
+        size: size,
+        price: price,
+        isAvailable: product.quantity.includes(size),
+        inStock: product.inStock
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching price',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getProducts,
   getProductById,
@@ -760,5 +950,6 @@ module.exports = {
   bulkDeleteProducts,
   updateStock,
   getProductStats,
-  uploadProductImages
+  uploadProductImages,
+  getProductPriceBySize
 };
