@@ -9,7 +9,9 @@ const {
   bulkDeleteProducts,
   updateStock,
   getProductStats,
-  uploadProductImages
+  uploadProductImages,
+  getProductPriceBySize,
+  updateProductPriceBySize
 } = require('../controllers/productController');
 const { protect, superAdminOnly, adminOrSuperAdmin } = require('../middleware/auth');
 const { checkBlockedApis } = require('../middleware/apiBlocker');
@@ -21,6 +23,7 @@ const router = express.Router();
 router.get('/stats/summary', getProductStats);
 router.get('/', getProducts);
 router.get('/:id', getProductById);
+router.get('/:id/price/:size', getProductPriceBySize);
 
 // Admin only routes (admin or super admin can access)
 router.put('/:id', 
@@ -70,6 +73,13 @@ router.post('/:id/upload-images',
   superAdminOnly, 
   uploadProduct.array('images', 5), 
   uploadProductImages
+);
+
+router.patch('/:id/price/:size', 
+  protect, 
+  superAdminOnly, 
+  checkBlockedApis('/api/products/:id/price/:size', 'PATCH'),
+  updateProductPriceBySize
 );
 
 module.exports = router;

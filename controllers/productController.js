@@ -29,12 +29,12 @@ const deleteSingleImage = (imagePath) => {
   }
 };
 
-// Helper function to validate and set prices
+// UPDATED: Helper function to validate and set prices - NO DEFAULTS
 const setProductPrices = (productData, existingProduct = null) => {
-  const prices = {
-    '30ml': 18,
-    '50ml': 25,
-    '100ml': 35
+  let prices = {
+    '30ml': null,
+    '50ml': null,
+    '100ml': null
   };
   
   // If prices object is provided in request
@@ -47,31 +47,81 @@ const setProductPrices = (productData, existingProduct = null) => {
       }
     }
     
-    // Merge provided prices with defaults
+    // Validate and set provided prices
     if (productData.prices && typeof productData.prices === 'object') {
-      if (productData.prices['30ml'] !== undefined) prices['30ml'] = parseFloat(productData.prices['30ml']);
-      if (productData.prices['50ml'] !== undefined) prices['50ml'] = parseFloat(productData.prices['50ml']);
-      if (productData.prices['100ml'] !== undefined) prices['100ml'] = parseFloat(productData.prices['100ml']);
+      // Check if at least one price is provided
+      const hasAnyPrice = productData.prices['30ml'] !== undefined || 
+                         productData.prices['50ml'] !== undefined || 
+                         productData.prices['100ml'] !== undefined;
+      
+      if (!hasAnyPrice && !existingProduct) {
+        throw new Error('At least one price must be provided');
+      }
+      
+      // Set provided prices
+      if (productData.prices['30ml'] !== undefined) {
+        const price = parseFloat(productData.prices['30ml']);
+        if (isNaN(price)) throw new Error('Invalid price for 30ml');
+        prices['30ml'] = price;
+      } else if (existingProduct && existingProduct.prices) {
+        prices['30ml'] = existingProduct.prices['30ml'];
+      }
+      
+      if (productData.prices['50ml'] !== undefined) {
+        const price = parseFloat(productData.prices['50ml']);
+        if (isNaN(price)) throw new Error('Invalid price for 50ml');
+        prices['50ml'] = price;
+      } else if (existingProduct && existingProduct.prices) {
+        prices['50ml'] = existingProduct.prices['50ml'];
+      }
+      
+      if (productData.prices['100ml'] !== undefined) {
+        const price = parseFloat(productData.prices['100ml']);
+        if (isNaN(price)) throw new Error('Invalid price for 100ml');
+        prices['100ml'] = price;
+      } else if (existingProduct && existingProduct.prices) {
+        prices['100ml'] = existingProduct.prices['100ml'];
+      }
+    }
+  } else if (existingProduct && existingProduct.prices) {
+    // Keep existing prices if no new prices provided
+    prices = { ...existingProduct.prices };
+  }
+  
+  // Validate that all three prices are provided for new products
+  if (!existingProduct) {
+    if (prices['30ml'] === null || prices['50ml'] === null || prices['100ml'] === null) {
+      throw new Error('All three prices (30ml, 50ml, 100ml) are required for new products');
+    }
+  } else {
+    // For updates, at least ensure we have some prices
+    if (prices['30ml'] === null && prices['50ml'] === null && prices['100ml'] === null) {
+      throw new Error('At least one price must be provided for update');
     }
   }
   
-  // Handle legacy price field for backward compatibility
-  if (productData.price && !productData.prices) {
-    const legacyPrice = parseFloat(productData.price);
-    prices['30ml'] = legacyPrice;
-    // If only one price provided, approximate others
-    if (!productData.prices) {
-      prices['50ml'] = legacyPrice + 7;
-      prices['100ml'] = legacyPrice + 17;
-    }
+  // Validate price logic: 50ml should be greater than 30ml, 100ml greater than 50ml
+  if (prices['30ml'] !== null && prices['50ml'] !== null && prices['50ml'] <= prices['30ml']) {
+    throw new Error('50ml price must be greater than 30ml price');
   }
   
-  // Validate that discounted price is not higher than any size price
+  if (prices['50ml'] !== null && prices['100ml'] !== null && prices['100ml'] <= prices['50ml']) {
+    throw new Error('100ml price must be greater than 50ml price');
+  }
+  
+  // Validate that discounted price is not higher than any available size price
   if (productData.discountedPrice) {
     const discountedPrice = parseFloat(productData.discountedPrice);
-    for (const size in prices) {
-      if (discountedPrice > prices[size]) {
-        throw new Error(`Discounted price cannot be greater than ${size} price (${prices[size]})`);
+    if (isNaN(discountedPrice)) throw new Error('Invalid discounted price');
+    
+    const availablePrices = [];
+    if (prices['30ml'] !== null) availablePrices.push(prices['30ml']);
+    if (prices['50ml'] !== null) availablePrices.push(prices['50ml']);
+    if (prices['100ml'] !== null) availablePrices.push(prices['100ml']);
+    
+    for (const price of availablePrices) {
+      if (discountedPrice > price) {
+        throw new Error(`Discounted price cannot be greater than product price (${price})`);
       }
     }
   }
@@ -98,7 +148,7 @@ const getProducts = async (req, res) => {
       endDate,
       featured,
       category,
-      size = '30ml' // Add size parameter for price filtering
+      size = '30ml'
     } = req.query;
 
     // Build filter object
@@ -129,10 +179,11 @@ const getProducts = async (req, res) => {
       }
     }
 
-    // Price range filter using new prices structure
+    // Price range filter - only include products that have the price set
     if (minPrice || maxPrice) {
       const priceField = `prices.${size}`;
       filter[priceField] = {};
+      filter[priceField].$ne = null; // Exclude products where price is null
       if (minPrice) filter[priceField].$gte = parseFloat(minPrice);
       if (maxPrice) filter[priceField].$lte = parseFloat(maxPrice);
     }
@@ -176,19 +227,19 @@ const getProducts = async (req, res) => {
 
     const total = await Product.countDocuments(filter);
 
-    // Get statistics with new pricing structure
+    // Get statistics with new pricing structure - only count products with prices
     const stats = await Product.aggregate([
       { $match: filter },
       {
         $group: {
           _id: null,
           totalProducts: { $sum: 1 },
-          totalValue30ml: { $sum: '$prices.30ml' },
-          totalValue50ml: { $sum: '$prices.50ml' },
-          totalValue100ml: { $sum: '$prices.100ml' },
-          averagePrice30ml: { $avg: '$prices.30ml' },
-          averagePrice50ml: { $avg: '$prices.50ml' },
-          averagePrice100ml: { $avg: '$prices.100ml' },
+          totalValue30ml: { $sum: { $cond: [{ $ne: ['$prices.30ml', null] }, '$prices.30ml', 0] } },
+          totalValue50ml: { $sum: { $cond: [{ $ne: ['$prices.50ml', null] }, '$prices.50ml', 0] } },
+          totalValue100ml: { $sum: { $cond: [{ $ne: ['$prices.100ml', null] }, '$prices.100ml', 0] } },
+          averagePrice30ml: { $avg: { $cond: [{ $ne: ['$prices.30ml', null] }, '$prices.30ml', null] } },
+          averagePrice50ml: { $avg: { $cond: [{ $ne: ['$prices.50ml', null] }, '$prices.50ml', null] } },
+          averagePrice100ml: { $avg: { $cond: [{ $ne: ['$prices.100ml', null] }, '$prices.100ml', null] } },
           totalStock: { $sum: '$stock' },
           lowStockCount: { $sum: { $cond: [{ $lt: ['$stock', 20] }, 1, 0] } }
         }
@@ -199,7 +250,7 @@ const getProducts = async (req, res) => {
     const formattedProducts = products.map(product => ({
       ...product.toObject(),
       currentPrices: product.getAllPrices(),
-      availableSizes: product.quantity
+      availableSizes: product.quantity.filter(size => product.getPriceForQuantity(size) !== null)
     }));
 
     res.status(200).json({
@@ -214,7 +265,7 @@ const getProducts = async (req, res) => {
       stats: stats[0] ? {
         totalProducts: stats[0].totalProducts,
         totalValue: stats[0][`totalValue${size}`],
-        averagePrice: stats[0][`averagePrice${size}`],
+        averagePrice: stats[0][`averagePrice${size}`] || 0,
         totalStock: stats[0].totalStock,
         lowStockCount: stats[0].lowStockCount
       } : {
@@ -249,11 +300,15 @@ const getProductById = async (req, res) => {
       });
     }
     
+    // Filter out sizes without prices
+    const availableSizes = product.quantity.filter(size => product.getPriceForQuantity(size) !== null);
+    
     // Format response with pricing for all sizes
     const formattedProduct = {
       ...product.toObject(),
       currentPrices: product.getAllPrices(),
-      availableSizes: product.quantity,
+      availableSizes: availableSizes,
+      hasCompletePricing: product.hasAllPrices(),
       // Add helper method to get price for specific size
       getPriceForSize: (size) => product.getPriceForQuantity(size)
     };
@@ -318,7 +373,7 @@ const createProduct = async (req, res) => {
       }
     }
     
-    // Handle prices
+    // Handle prices - now required
     try {
       productData.prices = setProductPrices(productData);
     } catch (error) {
@@ -366,7 +421,7 @@ const createProduct = async (req, res) => {
     const formattedProduct = {
       ...product.toObject(),
       currentPrices: product.getAllPrices(),
-      availableSizes: product.quantity
+      availableSizes: product.quantity.filter(size => product.getPriceForQuantity(size) !== null)
     };
     
     res.status(201).json({
@@ -457,28 +512,17 @@ const updateProduct = async (req, res) => {
     if (updateData.inStock === 'true') updateData.inStock = true;
     if (updateData.inStock === 'false') updateData.inStock = false;
     
-    // Handle prices update
+    // Handle prices update - preserve existing if not provided
     if (updateData.prices || updateData.price) {
       try {
-        const existingPrices = product.prices;
         const newPrices = setProductPrices(updateData, product);
         
-        // Merge with existing prices if not all provided
+        // Update only the prices that were provided
         updateData.prices = {
-          '30ml': updateData.prices?.['30ml'] !== undefined ? parseFloat(updateData.prices['30ml']) : newPrices['30ml'],
-          '50ml': updateData.prices?.['50ml'] !== undefined ? parseFloat(updateData.prices['50ml']) : newPrices['50ml'],
-          '100ml': updateData.prices?.['100ml'] !== undefined ? parseFloat(updateData.prices['100ml']) : newPrices['100ml']
+          '30ml': updateData.prices?.['30ml'] !== undefined ? parseFloat(updateData.prices['30ml']) : product.prices['30ml'],
+          '50ml': updateData.prices?.['50ml'] !== undefined ? parseFloat(updateData.prices['50ml']) : product.prices['50ml'],
+          '100ml': updateData.prices?.['100ml'] !== undefined ? parseFloat(updateData.prices['100ml']) : product.prices['100ml']
         };
-        
-        // Validate discounted price against all sizes
-        if (updateData.discountedPrice) {
-          const discountedPrice = parseFloat(updateData.discountedPrice);
-          for (const size in updateData.prices) {
-            if (discountedPrice > updateData.prices[size]) {
-              throw new Error(`Discounted price cannot be greater than ${size} price (${updateData.prices[size]})`);
-            }
-          }
-        }
       } catch (error) {
         if (req.files && req.files.length > 0) {
           req.files.forEach(file => {
@@ -499,9 +543,12 @@ const updateProduct = async (req, res) => {
 
     // Handle new image uploads
     if (req.files && req.files.length > 0) {
-      // Delete old images
-      const oldImagePaths = product.images.map(img => img.url);
-      deleteOldImages(oldImagePaths);
+      // Don't delete old images by default - keep them unless specified
+      if (updateData.replaceImages === 'true') {
+        const oldImagePaths = product.images.map(img => img.url);
+        deleteOldImages(oldImagePaths);
+        product.images = [];
+      }
       
       const uploadedImages = [];
       
@@ -510,15 +557,15 @@ const updateProduct = async (req, res) => {
         const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
           url: relativePath,
-          isPrimary: i === 0
+          isPrimary: product.images.length === 0 && i === 0
         });
         console.log(`New image ${i + 1} saved at: ${relativePath}`);
       }
       
-      updateData.images = uploadedImages;
-      console.log('New images to save:', JSON.stringify(uploadedImages, null, 2));
+      updateData.images = [...product.images, ...uploadedImages];
+      console.log('Updated images:', JSON.stringify(updateData.images, null, 2));
     } else {
-      // Keep existing images if no new ones uploaded
+      // Keep existing images
       updateData.images = product.images;
     }
 
@@ -539,7 +586,8 @@ const updateProduct = async (req, res) => {
     const formattedProduct = {
       ...product.toObject(),
       currentPrices: product.getAllPrices(),
-      availableSizes: product.quantity
+      availableSizes: product.quantity.filter(size => product.getPriceForQuantity(size) !== null),
+      hasCompletePricing: product.hasAllPrices()
     };
     
     res.status(200).json({
@@ -753,12 +801,12 @@ const getProductStats = async (req, res) => {
         $group: {
           _id: null,
           totalProducts: { $sum: 1 },
-          totalValue30ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.30ml'] } },
-          totalValue50ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.50ml'] } },
-          totalValue100ml: { $sum: { $ifNull: ['$discountedPrice', '$prices.100ml'] } },
-          averagePrice30ml: { $avg: '$prices.30ml' },
-          averagePrice50ml: { $avg: '$prices.50ml' },
-          averagePrice100ml: { $avg: '$prices.100ml' },
+          totalValue30ml: { $sum: { $ifNull: ['$discountedPrice', { $cond: [{ $ne: ['$prices.30ml', null] }, '$prices.30ml', 0] }] } },
+          totalValue50ml: { $sum: { $ifNull: ['$discountedPrice', { $cond: [{ $ne: ['$prices.50ml', null] }, '$prices.50ml', 0] }] } },
+          totalValue100ml: { $sum: { $ifNull: ['$discountedPrice', { $cond: [{ $ne: ['$prices.100ml', null] }, '$prices.100ml', 0] }] } },
+          averagePrice30ml: { $avg: { $cond: [{ $ne: ['$prices.30ml', null] }, '$prices.30ml', null] } },
+          averagePrice50ml: { $avg: { $cond: [{ $ne: ['$prices.50ml', null] }, '$prices.50ml', null] } },
+          averagePrice100ml: { $avg: { $cond: [{ $ne: ['$prices.100ml', null] }, '$prices.100ml', null] } },
           totalStock: { $sum: '$stock' },
           featuredCount: { $sum: { $cond: ['$featured', 1, 0] } },
           lowStockCount: { $sum: { $cond: [{ $lt: ['$stock', 20] }, 1, 0] } },
@@ -789,9 +837,9 @@ const getProductStats = async (req, res) => {
         $group: {
           _id: '$gender',
           count: { $sum: 1 },
-          totalValue30ml: { $sum: '$prices.30ml' },
-          totalValue50ml: { $sum: '$prices.50ml' },
-          totalValue100ml: { $sum: '$prices.100ml' }
+          totalValue30ml: { $sum: { $cond: [{ $ne: ['$prices.30ml', null] }, '$prices.30ml', 0] } },
+          totalValue50ml: { $sum: { $cond: [{ $ne: ['$prices.50ml', null] }, '$prices.50ml', 0] } },
+          totalValue100ml: { $sum: { $cond: [{ $ne: ['$prices.100ml', null] }, '$prices.100ml', 0] } }
         }
       }
     ]);
@@ -919,6 +967,13 @@ const getProductPriceBySize = async (req, res) => {
     
     const price = product.getPriceForQuantity(size);
     
+    if (price === null) {
+      return res.status(404).json({
+        success: false,
+        message: `Price not available for ${size} size`
+      });
+    }
+    
     res.status(200).json({
       success: true,
       data: {
@@ -926,7 +981,7 @@ const getProductPriceBySize = async (req, res) => {
         name: product.name,
         size: size,
         price: price,
-        isAvailable: product.quantity.includes(size),
+        isAvailable: product.quantity.includes(size) && price !== null,
         inStock: product.inStock
       }
     });
@@ -935,6 +990,80 @@ const getProductPriceBySize = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching price',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update specific size price
+// @route   PATCH /api/products/:id/price/:size
+// @access  Private/Admin
+const updateProductPriceBySize = async (req, res) => {
+  try {
+    const { id, size } = req.params;
+    const { price } = req.body;
+    
+    if (!['30ml', '50ml', '100ml'].includes(size)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid size. Must be 30ml, 50ml, or 100ml'
+      });
+    }
+    
+    if (price === undefined || isNaN(parseFloat(price))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid price is required'
+      });
+    }
+    
+    const product = await Product.findById(id);
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+    
+    const newPrice = parseFloat(price);
+    
+    // Update the specific price
+    product.prices[size] = newPrice;
+    
+    // Validate price logic
+    if (product.prices['30ml'] !== null && product.prices['50ml'] !== null && 
+        product.prices['50ml'] <= product.prices['30ml']) {
+      return res.status(400).json({
+        success: false,
+        message: '50ml price must be greater than 30ml price'
+      });
+    }
+    
+    if (product.prices['50ml'] !== null && product.prices['100ml'] !== null && 
+        product.prices['100ml'] <= product.prices['50ml']) {
+      return res.status(400).json({
+        success: false,
+        message: '100ml price must be greater than 50ml price'
+      });
+    }
+    
+    await product.save();
+    
+    res.status(200).json({
+      success: true,
+      message: `${size} price updated successfully`,
+      data: {
+        productId: product._id,
+        name: product.name,
+        prices: product.getAllPrices()
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating price',
       error: error.message
     });
   }
@@ -951,5 +1080,6 @@ module.exports = {
   updateStock,
   getProductStats,
   uploadProductImages,
-  getProductPriceBySize
+  getProductPriceBySize,
+  updateProductPriceBySize // New function for updating individual size prices
 };

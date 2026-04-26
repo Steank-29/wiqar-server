@@ -18,22 +18,22 @@ const productSchema = new mongoose.Schema({
     enum: ['30ml', '50ml', '100ml'],
     required: true
   }],
-  // NEW: Store prices for each size
+  // NEW: Store prices for each size - NO DEFAULTS
   prices: {
     '30ml': {
       type: Number,
-      min: [0, 'Price cannot be negative'],
-      default: 18
+      required: [true, 'Price for 30ml is required'],
+      min: [0, 'Price cannot be negative']
     },
     '50ml': {
       type: Number,
-      min: [0, 'Price cannot be negative'],
-      default: 25
+      required: [true, 'Price for 50ml is required'],
+      min: [0, 'Price cannot be negative']
     },
     '100ml': {
       type: Number,
-      min: [0, 'Price cannot be negative'],
-      default: 35
+      required: [true, 'Price for 100ml is required'],
+      min: [0, 'Price cannot be negative']
     }
   },
   stock: {
@@ -53,13 +53,16 @@ const productSchema = new mongoose.Schema({
     min: [0, 'Discounted price cannot be negative'],
     validate: {
       validator: function(value) {
-        // Skip validation if value is not provided or if it's an update operation
         if (!value || value === undefined) return true;
-        // For backward compatibility, check if we're using old price field
-        const priceToCompare = this.price || this.get('price');
-        return value <= priceToCompare;
+        // Check against all prices? Or you can modify this logic
+        // This example checks if discounted price is less than any available size price
+        if (this.prices) {
+          const allPrices = [this.prices['30ml'], this.prices['50ml'], this.prices['100ml']];
+          return allPrices.some(price => value <= price);
+        }
+        return true;
       },
-      message: 'Discounted price cannot be greater than original price'
+      message: 'Discounted price must be less than or equal to at least one size price'
     }
   },
   description: {
@@ -113,16 +116,20 @@ const productSchema = new mongoose.Schema({
 
 // Virtual for discount percentage
 productSchema.virtual('discountPercentage').get(function() {
-  if (this.discountedPrice && this.price > 0) {
-    return Math.round(((this.price - this.discountedPrice) / this.price) * 100);
+  if (this.discountedPrice && this.prices) {
+    // Calculate based on the smallest price or a specific size
+    const smallestPrice = Math.min(this.prices['30ml'], this.prices['50ml'], this.prices['100ml']);
+    if (smallestPrice > 0) {
+      return Math.round(((smallestPrice - this.discountedPrice) / smallestPrice) * 100);
+    }
   }
   return 0;
 });
 
-// Virtual for current price (for backward compatibility)
+// Virtual for price (removed default, now returns null if no price exists)
 productSchema.virtual('price').get(function() {
-  // Return default price (30ml) for backward compatibility
-  return this.prices ? this.prices['30ml'] : 18;
+  // Return 30ml price if available, otherwise null
+  return this.prices ? this.prices['30ml'] : null;
 });
 
 // Method to get price for specific quantity
@@ -133,16 +140,28 @@ productSchema.methods.getPriceForQuantity = function(quantitySize) {
 
 // Method to get all prices
 productSchema.methods.getAllPrices = function() {
+  if (!this.prices) return null;
   return {
-    '30ml': this.prices ? this.prices['30ml'] : 18,
-    '50ml': this.prices ? this.prices['50ml'] : 25,
-    '100ml': this.prices ? this.prices['100ml'] : 35
+    '30ml': this.prices['30ml'],
+    '50ml': this.prices['50ml'],
+    '100ml': this.prices['100ml']
   };
 };
 
 // Method to check if quantity is available
 productSchema.methods.isQuantityAvailable = function(quantitySize) {
   return this.quantity.includes(quantitySize);
+};
+
+// Method to validate that all prices are set
+productSchema.methods.hasAllPrices = function() {
+  return this.prices && 
+         this.prices['30ml'] !== undefined && 
+         this.prices['30ml'] !== null &&
+         this.prices['50ml'] !== undefined && 
+         this.prices['50ml'] !== null &&
+         this.prices['100ml'] !== undefined && 
+         this.prices['100ml'] !== null;
 };
 
 // Indexes for better query performance
@@ -155,26 +174,20 @@ productSchema.index({ stock: 1 });
 productSchema.index({ featured: 1 });
 productSchema.index({ createdAt: -1 });
 
-// Pre-save middleware
-productSchema.pre('save', function() {
-  // Initialize prices if not exists
+// Pre-save middleware - NO DEFAULTS, only validation
+productSchema.pre('save', function(next) {
+  // Validate that all prices are provided
   if (!this.prices) {
-    this.prices = {
-      '30ml': 18,
-      '50ml': 25,
-      '100ml': 35
-    };
-  } else {
-    // Ensure each size has a price
-    if (this.prices['30ml'] === undefined || this.prices['30ml'] === null) {
-      this.prices['30ml'] = 18;
-    }
-    if (this.prices['50ml'] === undefined || this.prices['50ml'] === null) {
-      this.prices['50ml'] = 25;
-    }
-    if (this.prices['100ml'] === undefined || this.prices['100ml'] === null) {
-      this.prices['100ml'] = 35;
-    }
+    next(new Error('Prices object is required. Please provide prices for 30ml, 50ml, and 100ml'));
+    return;
+  }
+  
+  // Check if all three prices exist
+  if (this.prices['30ml'] === undefined || this.prices['30ml'] === null ||
+      this.prices['50ml'] === undefined || this.prices['50ml'] === null ||
+      this.prices['100ml'] === undefined || this.prices['100ml'] === null) {
+    next(new Error('All three prices (30ml, 50ml, 100ml) are required'));
+    return;
   }
   
   // Update inStock based on stock quantity
@@ -192,6 +205,8 @@ productSchema.pre('save', function() {
   
   // Update the updatedAt timestamp
   this.updatedAt = Date.now();
+  
+  next();
 });
 
 // Static method to get low stock products
