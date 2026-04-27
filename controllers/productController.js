@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Product = require('../models/product');
 const { validationResult } = require('express-validator');
 const fs = require('fs');
@@ -9,10 +10,27 @@ const deleteOldImages = (imagePaths) => {
   
   imagePaths.forEach(imagePath => {
     if (imagePath && imagePath !== 'default-product.jpg') {
-      const fullPath = path.join(__dirname, '..', imagePath);
+      // Handle different path formats
+      let fullPath = imagePath;
+      
+      // If it's a relative path from uploads folder
+      if (imagePath.startsWith('uploads/')) {
+        fullPath = path.join(__dirname, '..', imagePath);
+      } 
+      // If it's just a filename or already a full path
+      else if (!imagePath.startsWith('http') && !path.isAbsolute(imagePath)) {
+        fullPath = path.join(__dirname, '..', 'uploads', imagePath);
+      }
+      
       if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        console.log(`Deleted old image: ${fullPath}`);
+        try {
+          fs.unlinkSync(fullPath);
+          console.log(`Deleted old image: ${fullPath}`);
+        } catch (err) {
+          console.error(`Error deleting image ${fullPath}:`, err);
+        }
+      } else {
+        console.log(`Image not found: ${fullPath}`);
       }
     }
   });
@@ -21,15 +39,26 @@ const deleteOldImages = (imagePaths) => {
 // Helper function to delete a single image
 const deleteSingleImage = (imagePath) => {
   if (imagePath && imagePath !== 'default-product.jpg') {
-    const fullPath = path.join(__dirname, '..', imagePath);
+    let fullPath = imagePath;
+    
+    if (imagePath.startsWith('uploads/')) {
+      fullPath = path.join(__dirname, '..', imagePath);
+    } else if (!imagePath.startsWith('http') && !path.isAbsolute(imagePath)) {
+      fullPath = path.join(__dirname, '..', 'uploads', imagePath);
+    }
+    
     if (fs.existsSync(fullPath)) {
-      fs.unlinkSync(fullPath);
-      console.log(`Deleted image: ${fullPath}`);
+      try {
+        fs.unlinkSync(fullPath);
+        console.log(`Deleted image: ${fullPath}`);
+      } catch (err) {
+        console.error(`Error deleting image ${fullPath}:`, err);
+      }
     }
   }
 };
 
-// UPDATED: Helper function to validate and set prices - NO DEFAULTS
+// Helper function to validate and set prices - NO DEFAULTS
 const setProductPrices = (productData, existingProduct = null) => {
   let prices = {
     '30ml': null,
@@ -62,6 +91,7 @@ const setProductPrices = (productData, existingProduct = null) => {
       if (productData.prices['30ml'] !== undefined) {
         const price = parseFloat(productData.prices['30ml']);
         if (isNaN(price)) throw new Error('Invalid price for 30ml');
+        if (price < 0) throw new Error('Price cannot be negative');
         prices['30ml'] = price;
       } else if (existingProduct && existingProduct.prices) {
         prices['30ml'] = existingProduct.prices['30ml'];
@@ -70,6 +100,7 @@ const setProductPrices = (productData, existingProduct = null) => {
       if (productData.prices['50ml'] !== undefined) {
         const price = parseFloat(productData.prices['50ml']);
         if (isNaN(price)) throw new Error('Invalid price for 50ml');
+        if (price < 0) throw new Error('Price cannot be negative');
         prices['50ml'] = price;
       } else if (existingProduct && existingProduct.prices) {
         prices['50ml'] = existingProduct.prices['50ml'];
@@ -78,6 +109,7 @@ const setProductPrices = (productData, existingProduct = null) => {
       if (productData.prices['100ml'] !== undefined) {
         const price = parseFloat(productData.prices['100ml']);
         if (isNaN(price)) throw new Error('Invalid price for 100ml');
+        if (price < 0) throw new Error('Price cannot be negative');
         prices['100ml'] = price;
       } else if (existingProduct && existingProduct.prices) {
         prices['100ml'] = existingProduct.prices['100ml'];
@@ -309,7 +341,6 @@ const getProductById = async (req, res) => {
       currentPrices: product.getAllPrices(),
       availableSizes: availableSizes,
       hasCompletePricing: product.hasAllPrices(),
-      // Add helper method to get price for specific size
       getPriceForSize: (size) => product.getPriceForQuantity(size)
     };
     
@@ -457,6 +488,7 @@ const updateProduct = async (req, res) => {
     console.log('Product ID:', req.params.id);
     console.log('Request body:', req.body);
     console.log('Request files:', req.files);
+    console.log('Replace images flag:', req.body.replaceImages);
     
     let product = await Product.findById(req.params.id);
     
@@ -541,33 +573,50 @@ const updateProduct = async (req, res) => {
     // Remove legacy price field if exists
     delete updateData.price;
 
-    // Handle new image uploads
+    // Handle image uploads - FIXED
     if (req.files && req.files.length > 0) {
-      // Don't delete old images by default - keep them unless specified
-      if (updateData.replaceImages === 'true') {
+      // Check if we should replace existing images or append
+      const replaceImages = updateData.replaceImages === 'true' || updateData.replaceImages === true;
+      
+      console.log('Replace images mode:', replaceImages);
+      
+      if (replaceImages) {
+        // Delete all old images
+        console.log('Deleting old images...');
         const oldImagePaths = product.images.map(img => img.url);
         deleteOldImages(oldImagePaths);
-        product.images = [];
+        // Start with empty array
+        updateData.images = [];
+        console.log('Old images deleted, starting fresh');
+      } else {
+        // Keep existing images as base
+        updateData.images = [...product.images];
+        console.log('Preserving existing images, count:', product.images.length);
       }
       
+      // Add new images
       const uploadedImages = [];
-      
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
         const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
           url: relativePath,
-          isPrimary: product.images.length === 0 && i === 0
+          isPrimary: updateData.images.length === 0 && i === 0
         });
         console.log(`New image ${i + 1} saved at: ${relativePath}`);
       }
       
-      updateData.images = [...product.images, ...uploadedImages];
-      console.log('Updated images:', JSON.stringify(updateData.images, null, 2));
+      // Append new images to the images array
+      updateData.images = [...updateData.images, ...uploadedImages];
+      console.log('Total images after update:', updateData.images.length);
     } else {
-      // Keep existing images
+      // No new images uploaded, keep existing images
       updateData.images = product.images;
+      console.log('No new images, keeping existing:', product.images.length);
     }
+
+    // Remove replaceImages from updateData as it's not a model field
+    delete updateData.replaceImages;
 
     // Use findByIdAndUpdate with proper options
     product = await Product.findByIdAndUpdate(
@@ -580,7 +629,7 @@ const updateProduct = async (req, res) => {
       }
     );
     
-    console.log('Product updated successfully');
+    console.log('Product updated successfully. Final image count:', product.images.length);
     
     // Return formatted product
     const formattedProduct = {
@@ -1081,5 +1130,5 @@ module.exports = {
   getProductStats,
   uploadProductImages,
   getProductPriceBySize,
-  updateProductPriceBySize // New function for updating individual size prices
+  updateProductPriceBySize
 };
