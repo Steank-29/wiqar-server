@@ -366,11 +366,12 @@ const createProduct = async (req, res) => {
     console.log('=== CREATE PRODUCT DEBUG ===');
     console.log('Request body:', req.body);
     console.log('Request files:', req.files);
+    console.log('User making request:', req.user);
     
     // Check validation errors
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      // Delete uploaded files if validation fails
+      console.log('Validation errors:', errors.array());
       if (req.files && req.files.length > 0) {
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
@@ -387,27 +388,37 @@ const createProduct = async (req, res) => {
 
     const productData = { ...req.body };
     
+    console.log('Step 1: Parsing JSON fields');
     // Parse JSON fields if they come as strings
     if (typeof productData.quantity === 'string') {
       try {
         productData.quantity = JSON.parse(productData.quantity);
+        console.log('Parsed quantity:', productData.quantity);
       } catch (e) {
+        console.log('Failed to parse quantity as JSON, trying split method');
         productData.quantity = productData.quantity.split(',').map(q => q.trim());
+        console.log('Parsed quantity (split):', productData.quantity);
       }
     }
     
     if (typeof productData.tags === 'string') {
       try {
         productData.tags = JSON.parse(productData.tags);
+        console.log('Parsed tags:', productData.tags);
       } catch (e) {
+        console.log('Failed to parse tags as JSON, trying split method');
         productData.tags = productData.tags.split(',').map(tag => tag.trim());
+        console.log('Parsed tags (split):', productData.tags);
       }
     }
     
+    console.log('Step 2: Handling prices');
     // Handle prices - now required
     try {
       productData.prices = setProductPrices(productData);
+      console.log('Prices set successfully:', productData.prices);
     } catch (error) {
+      console.error('Error in setProductPrices:', error.message);
       if (req.files && req.files.length > 0) {
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
@@ -424,12 +435,14 @@ const createProduct = async (req, res) => {
     // Remove legacy price field if exists
     delete productData.price;
 
+    console.log('Step 3: Handling images');
     // Handle image uploads
     if (req.files && req.files.length > 0) {
       const uploadedImages = [];
       
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
+        console.log(`Processing image ${i + 1}:`, file.path);
         const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
           url: relativePath,
@@ -445,6 +458,9 @@ const createProduct = async (req, res) => {
       productData.images = [];
     }
 
+    console.log('Step 4: Creating product in database');
+    console.log('Final product data:', JSON.stringify(productData, null, 2));
+    
     const product = await Product.create(productData);
     console.log('Product created successfully with ID:', product._id);
     
@@ -461,7 +477,11 @@ const createProduct = async (req, res) => {
       data: formattedProduct
     });
   } catch (error) {
-    console.error('Error in createProduct:', error);
+    console.error('=== ERROR IN CREATEPRODUCT ===');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    
     // Delete uploaded files if there's an error
     if (req.files && req.files.length > 0) {
       req.files.forEach(file => {
@@ -474,7 +494,8 @@ const createProduct = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error creating product',
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
