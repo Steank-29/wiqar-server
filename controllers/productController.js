@@ -19,7 +19,7 @@ const deleteOldImages = (imagePaths) => {
       } 
       // If it's just a filename or already a full path
       else if (!imagePath.startsWith('http') && !path.isAbsolute(imagePath)) {
-        fullPath = path.join(__dirname, '..', 'uploads', imagePath);
+        fullPath = path.join(__dirname, '..', 'uploads/products', path.basename(imagePath));
       }
       
       if (fs.existsSync(fullPath)) {
@@ -44,7 +44,7 @@ const deleteSingleImage = (imagePath) => {
     if (imagePath.startsWith('uploads/')) {
       fullPath = path.join(__dirname, '..', imagePath);
     } else if (!imagePath.startsWith('http') && !path.isAbsolute(imagePath)) {
-      fullPath = path.join(__dirname, '..', 'uploads', imagePath);
+      fullPath = path.join(__dirname, '..', 'uploads/products', path.basename(imagePath));
     }
     
     if (fs.existsSync(fullPath)) {
@@ -486,19 +486,16 @@ const updateProduct = async (req, res) => {
   try {
     console.log('=== UPDATE PRODUCT DEBUG ===');
     console.log('Product ID:', req.params.id);
-    console.log('Request body:', req.body);
-    console.log('Request files:', req.files);
+    console.log('Request files:', req.files ? req.files.length : 0);
     console.log('Replace images flag:', req.body.replaceImages);
     
     let product = await Product.findById(req.params.id);
     
     if (!product) {
-      // Delete uploaded files if product not found
       if (req.files && req.files.length > 0) {
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
-            console.log(`Deleted file because product not found: ${file.path}`);
           }
         });
       }
@@ -508,135 +505,116 @@ const updateProduct = async (req, res) => {
       });
     }
 
-    const updateData = { ...req.body };
+    // Build update object properly
+    const updateFields = {};
     
-    // Parse JSON fields
-    if (updateData.quantity && typeof updateData.quantity === 'string') {
-      try {
-        updateData.quantity = JSON.parse(updateData.quantity);
-      } catch (e) {
-        updateData.quantity = updateData.quantity.split(',').map(q => q.trim());
-      }
-    }
+    // Simple fields
+    if (req.body.name !== undefined) updateFields.name = req.body.name;
+    if (req.body.fragrance !== undefined) updateFields.fragrance = req.body.fragrance;
+    if (req.body.description !== undefined) updateFields.description = req.body.description;
+    if (req.body.category !== undefined) updateFields.category = req.body.category;
+    if (req.body.gender !== undefined) updateFields.gender = req.body.gender;
+    if (req.body.stock !== undefined) updateFields.stock = parseInt(req.body.stock);
+    if (req.body.rating !== undefined) updateFields.rating = parseFloat(req.body.rating);
+    if (req.body.discountedPrice !== undefined) updateFields.discountedPrice = parseFloat(req.body.discountedPrice);
     
-    if (updateData.tags && typeof updateData.tags === 'string') {
-      try {
-        updateData.tags = JSON.parse(updateData.tags);
-      } catch (e) {
-        updateData.tags = updateData.tags.split(',').map(tag => tag.trim());
-      }
-    }
-
-    // Convert string numbers to actual numbers
-    if (updateData.discountedPrice) {
-      updateData.discountedPrice = parseFloat(updateData.discountedPrice);
-    }
-    if (updateData.stock) {
-      updateData.stock = parseInt(updateData.stock);
-    }
-    if (updateData.rating) {
-      updateData.rating = parseFloat(updateData.rating);
-    }
-
-    // Convert string booleans to actual booleans
-    if (updateData.featured === 'true') updateData.featured = true;
-    if (updateData.featured === 'false') updateData.featured = false;
-    if (updateData.inStock === 'true') updateData.inStock = true;
-    if (updateData.inStock === 'false') updateData.inStock = false;
+    // Boolean fields
+    if (req.body.featured !== undefined) updateFields.featured = req.body.featured === 'true' || req.body.featured === true;
+    if (req.body.inStock !== undefined) updateFields.inStock = req.body.inStock === 'true' || req.body.inStock === true;
     
-    // Handle prices update - preserve existing if not provided
-    if (updateData.prices || updateData.price) {
-      try {
-        const newPrices = setProductPrices(updateData, product);
-        
-        // Update only the prices that were provided
-        updateData.prices = {
-          '30ml': updateData.prices?.['30ml'] !== undefined ? parseFloat(updateData.prices['30ml']) : product.prices['30ml'],
-          '50ml': updateData.prices?.['50ml'] !== undefined ? parseFloat(updateData.prices['50ml']) : product.prices['50ml'],
-          '100ml': updateData.prices?.['100ml'] !== undefined ? parseFloat(updateData.prices['100ml']) : product.prices['100ml']
-        };
-      } catch (error) {
-        if (req.files && req.files.length > 0) {
-          req.files.forEach(file => {
-            if (fs.existsSync(file.path)) {
-              fs.unlinkSync(file.path);
-            }
-          });
+    // Quantity array
+    if (req.body.quantity !== undefined) {
+      if (typeof req.body.quantity === 'string') {
+        try {
+          updateFields.quantity = JSON.parse(req.body.quantity);
+        } catch (e) {
+          updateFields.quantity = req.body.quantity.split(',').map(q => q.trim());
         }
-        return res.status(400).json({
-          success: false,
-          message: error.message
-        });
+      } else {
+        updateFields.quantity = req.body.quantity;
       }
     }
     
-    // Remove legacy price field if exists
-    delete updateData.price;
-
-    // Handle image uploads - FIXED
-    if (req.files && req.files.length > 0) {
-      // Check if we should replace existing images or append
-      const replaceImages = updateData.replaceImages === 'true' || updateData.replaceImages === true;
+    // Tags array
+    if (req.body.tags !== undefined) {
+      if (typeof req.body.tags === 'string') {
+        try {
+          updateFields.tags = JSON.parse(req.body.tags);
+        } catch (e) {
+          updateFields.tags = req.body.tags.split(',').map(tag => tag.trim());
+        }
+      } else {
+        updateFields.tags = req.body.tags;
+      }
+    }
+    
+    // Prices object
+    if (req.body.prices !== undefined) {
+      let prices = req.body.prices;
+      if (typeof prices === 'string') {
+        try {
+          prices = JSON.parse(prices);
+        } catch (e) {
+          console.log('Failed to parse prices');
+        }
+      }
       
-      console.log('Replace images mode:', replaceImages);
+      updateFields.prices = {
+        '30ml': prices['30ml'] !== undefined ? parseFloat(prices['30ml']) : product.prices['30ml'],
+        '50ml': prices['50ml'] !== undefined ? parseFloat(prices['50ml']) : product.prices['50ml'],
+        '100ml': prices['100ml'] !== undefined ? parseFloat(prices['100ml']) : product.prices['100ml']
+      };
+      
+      // Validate price logic
+      if (updateFields.prices['50ml'] <= updateFields.prices['30ml']) {
+        throw new Error('50ml price must be greater than 30ml price');
+      }
+      if (updateFields.prices['100ml'] <= updateFields.prices['50ml']) {
+        throw new Error('100ml price must be greater than 50ml price');
+      }
+    }
+    
+    // Handle images
+    if (req.files && req.files.length > 0) {
+      const replaceImages = req.body.replaceImages === 'true' || req.body.replaceImages === true;
+      
+      let currentImages = [...product.images];
       
       if (replaceImages) {
-        // Delete all old images
-        console.log('Deleting old images...');
-        const oldImagePaths = product.images.map(img => img.url);
+        const oldImagePaths = currentImages.map(img => img.url);
         deleteOldImages(oldImagePaths);
-        // Start with empty array
-        updateData.images = [];
-        console.log('Old images deleted, starting fresh');
-      } else {
-        // Keep existing images as base
-        updateData.images = [...product.images];
-        console.log('Preserving existing images, count:', product.images.length);
+        currentImages = [];
+        console.log('Replaced all images');
       }
       
-      // Add new images
-      const uploadedImages = [];
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
         const relativePath = file.path.replace(/\\/g, '/');
-        uploadedImages.push({
+        currentImages.push({
           url: relativePath,
-          isPrimary: updateData.images.length === 0 && i === 0
+          isPrimary: currentImages.length === 0 && i === 0
         });
-        console.log(`New image ${i + 1} saved at: ${relativePath}`);
+        console.log(`Added new image: ${relativePath}`);
       }
       
-      // Append new images to the images array
-      updateData.images = [...updateData.images, ...uploadedImages];
-      console.log('Total images after update:', updateData.images.length);
-    } else {
-      // No new images uploaded, keep existing images
-      updateData.images = product.images;
-      console.log('No new images, keeping existing:', product.images.length);
+      updateFields.images = currentImages;
+      console.log(`Total images after update: ${currentImages.length}`);
     }
-
-    // Remove replaceImages from updateData as it's not a model field
-    delete updateData.replaceImages;
-
-    // Use findByIdAndUpdate with proper options
-    product = await Product.findByIdAndUpdate(
+    
+    // Update the product
+    const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id,
-      updateData,
-      { 
-        new: true, 
-        runValidators: true,
-        context: 'query'
-      }
+      { $set: updateFields },
+      { new: true, runValidators: true }
     );
     
-    console.log('Product updated successfully. Final image count:', product.images.length);
+    console.log('Product updated successfully');
     
-    // Return formatted product
     const formattedProduct = {
-      ...product.toObject(),
-      currentPrices: product.getAllPrices(),
-      availableSizes: product.quantity.filter(size => product.getPriceForQuantity(size) !== null),
-      hasCompletePricing: product.hasAllPrices()
+      ...updatedProduct.toObject(),
+      currentPrices: updatedProduct.getAllPrices(),
+      availableSizes: updatedProduct.quantity.filter(size => updatedProduct.getPriceForQuantity(size) !== null),
+      hasCompletePricing: updatedProduct.hasAllPrices()
     };
     
     res.status(200).json({
@@ -644,19 +622,18 @@ const updateProduct = async (req, res) => {
       message: 'Product updated successfully',
       data: formattedProduct
     });
+    
   } catch (error) {
     console.error('Error in updateProduct:', error);
-    // Delete uploaded files if there's an error
+    
     if (req.files && req.files.length > 0) {
       req.files.forEach(file => {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);
-          console.log(`Deleted file due to error: ${file.path}`);
         }
       });
     }
     
-    // Handle validation errors more gracefully
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -667,7 +644,7 @@ const updateProduct = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      message: 'Error updating product',
+      message: error.message || 'Error updating product',
       error: error.message
     });
   }
@@ -687,10 +664,8 @@ const deleteProduct = async (req, res) => {
       });
     }
 
-    // Delete all product images
     const imagePaths = product.images.map(img => img.url);
     deleteOldImages(imagePaths);
-
     await product.deleteOne();
     
     res.status(200).json({
@@ -730,14 +705,10 @@ const deleteProductImage = async (req, res) => {
       });
     }
 
-    // Delete the image file
     const imageToDelete = product.images[imageIndex];
     deleteSingleImage(imageToDelete.url);
-
-    // Remove image from array
     product.images.splice(imageIndex, 1);
     
-    // If we deleted the primary image and there are other images, make the first one primary
     if (imageToDelete.isPrimary && product.images.length > 0) {
       product.images[0].isPrimary = true;
     }
@@ -773,10 +744,8 @@ const bulkDeleteProducts = async (req, res) => {
       });
     }
 
-    // Get all products to delete their images
     const products = await Product.find({ _id: { $in: productIds } });
     
-    // Delete all images
     for (const product of products) {
       const imagePaths = product.images.map(img => img.url);
       deleteOldImages(imagePaths);
@@ -880,7 +849,6 @@ const getProductStats = async (req, res) => {
       }
     ]);
 
-    // Get gender distribution with pricing
     const genderStats = await Product.aggregate([
       {
         $group: {
@@ -1076,11 +1044,8 @@ const updateProductPriceBySize = async (req, res) => {
     }
     
     const newPrice = parseFloat(price);
-    
-    // Update the specific price
     product.prices[size] = newPrice;
     
-    // Validate price logic
     if (product.prices['30ml'] !== null && product.prices['50ml'] !== null && 
         product.prices['50ml'] <= product.prices['30ml']) {
       return res.status(400).json({
