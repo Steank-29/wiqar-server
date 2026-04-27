@@ -174,41 +174,6 @@ productSchema.index({ stock: 1 });
 productSchema.index({ featured: 1 });
 productSchema.index({ createdAt: -1 });
 
-// Pre-save middleware - NO DEFAULTS, only validation
-productSchema.pre('save', function(next) {
-  // Validate that all prices are provided
-  if (!this.prices) {
-    next(new Error('Prices object is required. Please provide prices for 30ml, 50ml, and 100ml'));
-    return;
-  }
-  
-  // Check if all three prices exist
-  if (this.prices['30ml'] === undefined || this.prices['30ml'] === null ||
-      this.prices['50ml'] === undefined || this.prices['50ml'] === null ||
-      this.prices['100ml'] === undefined || this.prices['100ml'] === null) {
-    next(new Error('All three prices (30ml, 50ml, 100ml) are required'));
-    return;
-  }
-  
-  // Update inStock based on stock quantity
-  this.inStock = this.stock > 0;
-  
-  // Ensure tags are lowercase and trimmed
-  if (this.tags && Array.isArray(this.tags)) {
-    this.tags = this.tags.map(tag => tag.toLowerCase().trim());
-  }
-  
-  // Remove duplicate entries from quantity array
-  if (this.quantity && Array.isArray(this.quantity)) {
-    this.quantity = [...new Set(this.quantity)];
-  }
-  
-  // Update the updatedAt timestamp
-  this.updatedAt = Date.now();
-  
-  next();
-});
-
 // Static method to get low stock products
 productSchema.statics.getLowStockProducts = function(threshold = 20) {
   return this.find({ stock: { $lt: threshold } }).sort({ stock: 1 });
