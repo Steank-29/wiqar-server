@@ -43,7 +43,7 @@ router.patch('/:id/stock',
 // Super admin only routes (only super admin can access)
 router.post('/', 
   protect, 
-  superAdminOnly, 
+  adminOrSuperAdmin, 
   checkBlockedApis('/api/products', 'POST'),
   uploadProduct.array('images', 5), 
   createProduct
