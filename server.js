@@ -23,8 +23,12 @@ app.use(express.urlencoded({ extended: true }));
 
 // ✅ FIXED CORS CONFIGURATION
 const allowedOrigins = [
-  'http://localhost:8080',      // Your existing localhost
-  'https://wqar-3k5u.vercel.app', // Your frontend (removed trailing slash)
+  'http://localhost:8080',      
+  'https://wqar-3k5u.vercel.app', 
+  'https://www.wiqar-perfume.com',
+  'https://wiqar-perfume.com',
+  'http://www.wiqar-perfume.com',
+  'http://wiqar-perfume.com',
   /\.vercel\.app$/  
 ];
 
