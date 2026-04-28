@@ -1,4 +1,3 @@
-// uploadProduct.js
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('cloudinary').v2;
@@ -22,7 +21,7 @@ const productStorage = new CloudinaryStorage({
     
     return {
       folder: `products/${sanitizedName}`,
-      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'], // ✅ Added 'avif'
       transformation: [
         { width: 800, height: 800, crop: 'limit', quality: 'auto' }
       ],
@@ -31,16 +30,16 @@ const productStorage = new CloudinaryStorage({
   }
 });
 
-// File filter for images only
+// File filter for images only - ✅ Added avif support
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const allowedTypes = /jpeg|jpg|png|gif|webp|avif/; // ✅ Added avif
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
 
   if (mimetype && extname) {
     return cb(null, true);
   } else {
-    cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp)'));
+    cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp, avif)'));
   }
 };
 
@@ -48,7 +47,7 @@ const fileFilter = (req, file, cb) => {
 const uploadProduct = multer({
   storage: productStorage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 10 * 1024 * 1024, // Increased to 10MB for AVIF files
     files: 5 // Max 5 files
   },
   fileFilter: fileFilter
