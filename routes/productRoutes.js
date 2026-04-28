@@ -15,7 +15,7 @@ const {
 } = require('../controllers/productController');
 const { protect, superAdminOnly, adminOrSuperAdmin } = require('../middleware/auth');
 const { checkBlockedApis } = require('../middleware/apiBlocker');
-const uploadProduct = require('../middleware/uploadProduct');
+const { uploadProduct } = require('../middleware/uploadProduct'); // ← CHANGED: destructure uploadProduct
 
 const router = express.Router();
 
@@ -40,15 +40,16 @@ router.patch('/:id/stock',
   updateStock
 );
 
-// Super admin only routes (only super admin can access)
+// Admin & Super Admin can create products (FIXED)
 router.post('/', 
   protect, 
-  adminOrSuperAdmin, 
+  adminOrSuperAdmin,  // ← Changed from superAdminOnly
   checkBlockedApis('/api/products', 'POST'),
   uploadProduct.array('images', 5), 
   createProduct
 );
 
+// Super admin only routes (only super admin can access)
 router.delete('/:id', 
   protect, 
   superAdminOnly, 

@@ -1,22 +1,33 @@
+// uploadProduct.js
 const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('cloudinary').v2;
 const path = require('path');
 const fs = require('fs');
 
-// Ensure product upload directory exists
-const productUploadDir = 'uploads/products';
-if (!fs.existsSync(productUploadDir)) {
-  fs.mkdirSync(productUploadDir, { recursive: true });
-}
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
-// Configure storage for product images
-const productStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/products/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, `product-${uniqueSuffix}${ext}`);
+// Create Cloudinary storage
+const productStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: async (req, file) => {
+    // Get product name for folder organization
+    const productName = req.body.name || 'product';
+    const sanitizedName = productName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    
+    return {
+      folder: `products/${sanitizedName}`,
+      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+      transformation: [
+        { width: 800, height: 800, crop: 'limit', quality: 'auto' }
+      ],
+      public_id: `${Date.now()}-${Math.round(Math.random() * 1E9)}`
+    };
   }
 });
 
@@ -33,7 +44,7 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Create multer instance for product images
+// Create multer instance
 const uploadProduct = multer({
   storage: productStorage,
   limits: {
@@ -43,4 +54,33 @@ const uploadProduct = multer({
   fileFilter: fileFilter
 });
 
-module.exports = uploadProduct;
+// Helper function to delete image from Cloudinary
+const deleteCloudinaryImage = async (imageUrl) => {
+  try {
+    if (!imageUrl) return;
+    
+    // Extract public_id from Cloudinary URL
+    const urlParts = imageUrl.split('/');
+    const filename = urlParts[urlParts.length - 1];
+    const publicId = `products/${urlParts[urlParts.length - 2]}/${filename.split('.')[0]}`;
+    
+    const result = await cloudinary.uploader.destroy(publicId);
+    console.log('Cloudinary delete result:', result);
+    return result;
+  } catch (error) {
+    console.error('Error deleting from Cloudinary:', error);
+  }
+};
+
+// Helper function to delete multiple images
+const deleteMultipleCloudinaryImages = async (imageUrls) => {
+  const deletePromises = imageUrls.map(url => deleteCloudinaryImage(url));
+  await Promise.all(deletePromises);
+};
+
+module.exports = { 
+  uploadProduct,
+  deleteCloudinaryImage,
+  deleteMultipleCloudinaryImages,
+  cloudinary
+};

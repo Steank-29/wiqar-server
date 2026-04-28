@@ -3,8 +3,9 @@ const Product = require('../models/product');
 const { validationResult } = require('express-validator');
 const fs = require('fs');
 const path = require('path');
+const { deleteCloudinaryImage, deleteMultipleCloudinaryImages } = require('../middleware/uploadProduct');
 
-// Helper function to delete old product images
+// Helper function to delete old product images (local files - for backward compatibility)
 const deleteOldImages = (imagePaths) => {
   if (!imagePaths || !Array.isArray(imagePaths)) return;
   
@@ -36,7 +37,7 @@ const deleteOldImages = (imagePaths) => {
   });
 };
 
-// Helper function to delete a single image
+// Helper function to delete a single image (local files - for backward compatibility)
 const deleteSingleImage = (imagePath) => {
   if (imagePath && imagePath !== 'default-product.jpg') {
     let fullPath = imagePath;
@@ -55,6 +56,40 @@ const deleteSingleImage = (imagePath) => {
         console.error(`Error deleting image ${fullPath}:`, err);
       }
     }
+  }
+};
+
+// Helper function to delete images based on type (Cloudinary or local)
+const deleteProductImages = async (images) => {
+  if (!images || images.length === 0) return;
+  
+  // Separate Cloudinary URLs from local paths
+  const cloudinaryUrls = images.filter(img => img.url && img.url.startsWith('http') && img.url.includes('cloudinary'));
+  const localPaths = images.filter(img => img.url && !img.url.startsWith('http'));
+  
+  // Delete from Cloudinary if publicId exists
+  if (cloudinaryUrls.length > 0) {
+    const urls = cloudinaryUrls.map(img => img.url);
+    await deleteMultipleCloudinaryImages(urls);
+    console.log(`Deleted ${cloudinaryUrls.length} images from Cloudinary`);
+  }
+  
+  // Delete local files (backward compatibility)
+  if (localPaths.length > 0) {
+    const paths = localPaths.map(img => img.url);
+    deleteOldImages(paths);
+    console.log(`Deleted ${localPaths.length} local images`);
+  }
+};
+
+// Helper function to delete a single image
+const deleteSingleProductImage = async (image) => {
+  if (!image || !image.url) return;
+  
+  if (image.url.startsWith('http') && image.url.includes('cloudinary')) {
+    await deleteCloudinaryImage(image.url);
+  } else {
+    deleteSingleImage(image.url);
   }
 };
 
@@ -411,9 +446,9 @@ const createProduct = async (req, res) => {
     if (!errors.isEmpty()) {
       console.error('Validation errors found:', JSON.stringify(errors.array(), null, 2));
       
-      // Clean up uploaded files
-      if (req.files && req.files.length > 0) {
-        console.log('Cleaning up uploaded files due to validation error...');
+      // Clean up uploaded files (Cloudinary files don't need local cleanup)
+      if (req.files && req.files.length > 0 && req.files[0].path && !req.files[0].path.startsWith('http')) {
+        console.log('Cleaning up local uploaded files due to validation error...');
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
@@ -611,8 +646,8 @@ const createProduct = async (req, res) => {
     // Remove legacy price field if exists
     delete productData.price;
     
-    // Handle image uploads
-    console.log('\n--- STEP 3: HANDLING IMAGES ---');
+    // Handle image uploads with Cloudinary
+    console.log('\n--- STEP 3: HANDLING IMAGES (CLOUDINARY) ---');
     if (req.files && req.files.length > 0) {
       const uploadedImages = [];
       
@@ -620,21 +655,15 @@ const createProduct = async (req, res) => {
         const file = req.files[i];
         console.log(`Processing image ${i + 1}:`);
         console.log(`  - Original name: ${file.originalname}`);
-        console.log(`  - Path: ${file.path}`);
+        console.log(`  - Cloudinary URL: ${file.path}`);
         console.log(`  - Size: ${file.size} bytes`);
         
-        // Verify file exists
-        if (!fs.existsSync(file.path)) {
-          console.error(`  ✗ File not found at path: ${file.path}`);
-          continue;
-        }
-        
-        const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
-          url: relativePath,
+          url: file.path, // Cloudinary URL
+          publicId: file.filename, // Cloudinary public ID
           isPrimary: i === 0
         });
-        console.log(`  ✓ Image saved at: ${relativePath}`);
+        console.log(`  ✓ Image uploaded to Cloudinary: ${file.path}`);
       }
       
       productData.images = uploadedImages;
@@ -736,9 +765,9 @@ const createProduct = async (req, res) => {
       console.error('Error type: Token Expired');
     }
     
-    // Delete uploaded files if there's an error
-    if (req.files && req.files.length > 0) {
-      console.log('\n--- CLEANING UP UPLOADED FILES ---');
+    // Delete uploaded files if there's an error (Cloudinary files are already uploaded, no need to delete)
+    if (req.files && req.files.length > 0 && req.files[0].path && !req.files[0].path.startsWith('http')) {
+      console.log('\n--- CLEANING UP LOCAL UPLOADED FILES ---');
       req.files.forEach(file => {
         if (fs.existsSync(file.path)) {
           try {
@@ -876,27 +905,32 @@ const updateProduct = async (req, res) => {
       }
     }
     
-    // Handle images
+    // Handle images with Cloudinary
     if (req.files && req.files.length > 0) {
       const replaceImages = req.body.replaceImages === 'true' || req.body.replaceImages === true;
       
       let currentImages = [...product.images];
       
-      if (replaceImages) {
-        const oldImagePaths = currentImages.map(img => img.url);
-        deleteOldImages(oldImagePaths);
+      if (replaceImages && currentImages.length > 0) {
+        // Delete old images from Cloudinary
+        const cloudinaryImages = currentImages.filter(img => img.url && img.url.includes('cloudinary'));
+        if (cloudinaryImages.length > 0) {
+          const urls = cloudinaryImages.map(img => img.url);
+          await deleteMultipleCloudinaryImages(urls);
+          console.log(`Deleted ${cloudinaryImages.length} old images from Cloudinary`);
+        }
         currentImages = [];
         console.log('Replaced all images');
       }
       
+      // Add new images from Cloudinary
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
-        const relativePath = file.path.replace(/\\/g, '/');
         currentImages.push({
-          url: relativePath,
+          url: file.path, // Cloudinary URL          publicId: file.filename, // Cloudinary public ID
           isPrimary: currentImages.length === 0 && i === 0
         });
-        console.log(`Added new image: ${relativePath}`);
+        console.log(`Added new image from Cloudinary: ${file.path}`);
       }
       
       updateFields.images = currentImages;
@@ -966,8 +1000,8 @@ const deleteProduct = async (req, res) => {
       });
     }
 
-    const imagePaths = product.images.map(img => img.url);
-    deleteOldImages(imagePaths);
+    // Delete images from Cloudinary or local storage
+    await deleteProductImages(product.images);
     await product.deleteOne();
     
     res.status(200).json({
@@ -1008,7 +1042,10 @@ const deleteProductImage = async (req, res) => {
     }
 
     const imageToDelete = product.images[imageIndex];
-    deleteSingleImage(imageToDelete.url);
+    
+    // Delete image from Cloudinary or local storage
+    await deleteSingleProductImage(imageToDelete);
+    
     product.images.splice(imageIndex, 1);
     
     if (imageToDelete.isPrimary && product.images.length > 0) {
@@ -1049,8 +1086,7 @@ const bulkDeleteProducts = async (req, res) => {
     const products = await Product.find({ _id: { $in: productIds } });
     
     for (const product of products) {
-      const imagePaths = product.images.map(img => img.url);
-      deleteOldImages(imagePaths);
+      await deleteProductImages(product.images);
     }
 
     const result = await Product.deleteMany({ _id: { $in: productIds } });
@@ -1204,7 +1240,7 @@ const uploadProductImages = async (req, res) => {
     const product = await Product.findById(req.params.id);
     
     if (!product) {
-      if (req.files && req.files.length > 0) {
+      if (req.files && req.files.length > 0 && req.files[0].path && !req.files[0].path.startsWith('http')) {
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
@@ -1222,12 +1258,12 @@ const uploadProductImages = async (req, res) => {
       
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
-        const relativePath = file.path.replace(/\\/g, '/');
         uploadedImages.push({
-          url: relativePath,
+          url: file.path, // Cloudinary URL
+          publicId: file.filename, // Cloudinary public ID
           isPrimary: product.images.length === 0 && i === 0
         });
-        console.log(`Image uploaded: ${relativePath}`);
+        console.log(`Image uploaded to Cloudinary: ${file.path}`);
       }
       
       product.images.push(...uploadedImages);
@@ -1246,7 +1282,7 @@ const uploadProductImages = async (req, res) => {
     }
   } catch (error) {
     console.error('Error in uploadProductImages:', error);
-    if (req.files && req.files.length > 0) {
+    if (req.files && req.files.length > 0 && req.files[0].path && !req.files[0].path.startsWith('http')) {
       req.files.forEach(file => {
         if (fs.existsSync(file.path)) {
           fs.unlinkSync(file.path);

@@ -18,7 +18,7 @@ const productSchema = new mongoose.Schema({
     enum: ['30ml', '50ml', '100ml'],
     required: true
   }],
-  // NEW: Store prices for each size - NO DEFAULTS
+  // Store prices for each size
   prices: {
     '30ml': {
       type: Number,
@@ -54,8 +54,6 @@ const productSchema = new mongoose.Schema({
     validate: {
       validator: function(value) {
         if (!value || value === undefined) return true;
-        // Check against all prices? Or you can modify this logic
-        // This example checks if discounted price is less than any available size price
         if (this.prices) {
           const allPrices = [this.prices['30ml'], this.prices['50ml'], this.prices['100ml']];
           return allPrices.some(price => value <= price);
@@ -94,7 +92,14 @@ const productSchema = new mongoose.Schema({
     enum: ['Perfumes', 'Attars', 'Oils', 'Gifts']
   },
   images: [{
-    url: String,
+    url: {
+      type: String,
+      required: true
+    },
+    publicId: {
+      type: String,
+      required: false,
+    },
     isPrimary: {
       type: Boolean,
       default: false
@@ -117,7 +122,6 @@ const productSchema = new mongoose.Schema({
 // Virtual for discount percentage
 productSchema.virtual('discountPercentage').get(function() {
   if (this.discountedPrice && this.prices) {
-    // Calculate based on the smallest price or a specific size
     const smallestPrice = Math.min(this.prices['30ml'], this.prices['50ml'], this.prices['100ml']);
     if (smallestPrice > 0) {
       return Math.round(((smallestPrice - this.discountedPrice) / smallestPrice) * 100);
@@ -126,9 +130,21 @@ productSchema.virtual('discountPercentage').get(function() {
   return 0;
 });
 
-// Virtual for price (removed default, now returns null if no price exists)
+// Virtual for primary image URL
+productSchema.virtual('primaryImage').get(function() {
+  if (!this.images || this.images.length === 0) return null;
+  const primary = this.images.find(img => img.isPrimary);
+  return primary ? primary.url : this.images[0].url;
+});
+
+// Virtual for all image URLs (simplified)
+productSchema.virtual('imageUrls').get(function() {
+  if (!this.images || this.images.length === 0) return [];
+  return this.images.map(img => img.url);
+});
+
+// Virtual for price (returns 30ml price)
 productSchema.virtual('price').get(function() {
-  // Return 30ml price if available, otherwise null
   return this.prices ? this.prices['30ml'] : null;
 });
 
@@ -164,6 +180,49 @@ productSchema.methods.hasAllPrices = function() {
          this.prices['100ml'] !== null;
 };
 
+// Method to get Cloudinary public IDs for deletion
+productSchema.methods.getCloudinaryPublicIds = function() {
+  if (!this.images || this.images.length === 0) return [];
+  return this.images
+    .filter(img => img.publicId)
+    .map(img => img.publicId);
+};
+
+// Method to get image URLs
+productSchema.methods.getImageUrls = function() {
+  if (!this.images || this.images.length === 0) return [];
+  return this.images.map(img => img.url);
+};
+
+// Pre-save middleware
+productSchema.pre('save', function(next) {
+  // Update inStock based on stock quantity
+  this.inStock = this.stock > 0;
+  
+  // Ensure tags are lowercase and trimmed
+  if (this.tags && Array.isArray(this.tags)) {
+    this.tags = this.tags.map(tag => tag.toLowerCase().trim());
+  }
+  
+  // Remove duplicate entries from quantity array
+  if (this.quantity && Array.isArray(this.quantity)) {
+    this.quantity = [...new Set(this.quantity)];
+  }
+  
+  // Ensure at least one image is marked as primary
+  if (this.images && this.images.length > 0) {
+    const hasPrimary = this.images.some(img => img.isPrimary);
+    if (!hasPrimary) {
+      this.images[0].isPrimary = true;
+    }
+  }
+  
+  // Update the updatedAt timestamp
+  this.updatedAt = Date.now();
+  
+  next();
+});
+
 // Indexes for better query performance
 productSchema.index({ name: 'text', fragrance: 'text', tags: 'text' });
 productSchema.index({ gender: 1 });
@@ -173,6 +232,7 @@ productSchema.index({ 'prices.100ml': 1 });
 productSchema.index({ stock: 1 });
 productSchema.index({ featured: 1 });
 productSchema.index({ createdAt: -1 });
+productSchema.index({ 'images.publicId': 1 });
 
 // Static method to get low stock products
 productSchema.statics.getLowStockProducts = function(threshold = 20) {
@@ -195,6 +255,11 @@ productSchema.statics.getProductsByPriceRange = function(size, minPrice, maxPric
     query[priceField] = { ...query[priceField], $lte: maxPrice };
   }
   return this.find(query).sort({ [priceField]: 1 });
+};
+
+// Static method to find products by Cloudinary public ID (for cleanup)
+productSchema.statics.findByPublicId = function(publicId) {
+  return this.findOne({ 'images.publicId': publicId });
 };
 
 module.exports = mongoose.model('Product', productSchema);
