@@ -11,7 +11,9 @@ const {
   getOrderStats,
   updatePaymentStatus,
   addTrackingInfo,
-  cancelOrder
+  cancelOrder,
+  resendOrderEmail,     
+  testEmailConfig       
 } = require('../controllers/orderController');
 const { protect, superAdminOnly, adminOrSuperAdmin } = require('../middleware/auth');
 const { checkBlockedApis } = require('../middleware/apiBlocker');
@@ -79,5 +81,8 @@ router.put('/:id/cancel',
   checkBlockedApis('/api/orders/:id/cancel', 'PUT'),
   cancelOrder
 );
+
+router.post('/:id/resend-email', protect, adminOrSuperAdmin, resendOrderEmail);
+router.get('/test/email', protect, adminOrSuperAdmin, testEmailConfig);
 
 module.exports = router;
