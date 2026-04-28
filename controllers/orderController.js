@@ -1,9 +1,297 @@
 const Order = require('../models/Order');
 const sgMail = require('@sendgrid/mail');
 
-// @desc    Get all orders
-// @route   GET /api/orders
-// @access  Private/Admin
+// Initialize SendGrid
+if (!process.env.SENDGRID_API_KEY) {
+  console.error('⚠️ WARNING: SENDGRID_API_KEY is not set in environment variables!');
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  console.log('✅ SendGrid initialized successfully');
+}
+
+// Email configuration
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@wiqar-perfume.com';
+const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@wiqar-perfume.com';
+
+// Brand colors (matching your theme)
+const BRAND = {
+  name: 'WIQAR',
+  primary: '#8C5A3C',
+  primaryLight: '#B07850',
+  primaryDark: '#5C3520',
+  secondary: '#D4A574',
+  accent: '#C6A15B',
+  success: '#10B981',
+  warning: '#F59E0B',
+  white: '#FFFFFF',
+  gray50: '#F9FAFB',
+  gray100: '#F3F4F6',
+  gray200: '#E5E7EB',
+  gray300: '#D1D5DB',
+  gray400: '#9CA3AF',
+  gray500: '#6B7280',
+  gray600: '#4B5563',
+  gray700: '#374151',
+  gray800: '#1F2937',
+  gray900: '#111827',
+};
+
+// Helper functions
+const formatPrice = (price) => {
+  return new Intl.NumberFormat('tn-TN', { style: 'currency', currency: 'TND' }).format(price);
+};
+
+const formatDate = (date) => {
+  return new Date(date).toLocaleDateString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+// Get status badge style
+const getStatusBadge = (status) => {
+  const statusStyles = {
+    pending: { bg: '#FEF3C7', color: '#D97706', text: 'En attente' },
+    confirmed: { bg: '#DBEAFE', color: '#2563EB', text: 'Confirmée' },
+    processing: { bg: '#E0E7FF', color: '#4F46E5', text: 'En traitement' },
+    shipped: { bg: '#D1FAE5', color: '#059669', text: 'Expédiée' },
+    delivered: { bg: '#D1FAE5', color: '#059669', text: 'Livrée' },
+    cancelled: { bg: '#FEE2E2', color: '#DC2626', text: 'Annulée' }
+  };
+  return statusStyles[status] || statusStyles.pending;
+};
+
+// ==================== CUSTOMER EMAIL TEMPLATE ====================
+const generateCustomerEmailHTML = (order, orderNumber) => {
+  const itemsList = order.items.map(item => `
+    <tr style="border-bottom: 1px solid ${BRAND.gray200};">
+      <td style="padding: 14px 8px; text-align: left;">
+        <strong style="color: ${BRAND.gray800};">${item.name}</strong>
+        <div style="font-size: 12px; color: ${BRAND.gray500}; margin-top: 4px;">
+          ${item.selectedSize || ''} • Quantité: ${item.quantity}
+        </div>
+      </td>
+      <td style="padding: 14px 8px; text-align: right; color: ${BRAND.gray700};">
+        ${formatPrice(item.price * item.quantity)}
+      </td>
+    </tr>
+  `).join('');
+
+  const statusBadge = getStatusBadge(order.orderStatus);
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirmation de commande - ${BRAND.name}</title>
+  <style>
+    body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background-color: ${BRAND.gray50}; }
+    .container { max-width: 580px; margin: 0 auto; padding: 20px; }
+    .card { background: ${BRAND.white}; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .header { background: linear-gradient(135deg, ${BRAND.primary} 0%, ${BRAND.primaryDark} 100%); padding: 30px 20px; text-align: center; }
+    .header h1 { color: ${BRAND.white}; font-size: 28px; margin: 0; font-weight: 600; letter-spacing: 2px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 8px 0 0; font-size: 14px; }
+    .content { padding: 30px; }
+    .status-badge { display: inline-block; padding: 6px 16px; border-radius: 50px; font-size: 13px; font-weight: 600; background: ${statusBadge.bg}; color: ${statusBadge.color}; }
+    .info-section { background: ${BRAND.gray50}; border-radius: 16px; padding: 20px; margin: 20px 0; }
+    .info-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; }
+    .info-label { color: ${BRAND.gray500}; }
+    .info-value { color: ${BRAND.gray700}; font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    .total-row { border-top: 2px solid ${BRAND.gray200}; margin-top: 10px; padding-top: 10px; }
+    .grand-total { background: ${BRAND.primaryLight}10; border-radius: 12px; padding: 16px; margin-top: 20px; }
+    .footer { text-align: center; padding: 20px; background: ${BRAND.gray50}; font-size: 12px; color: ${BRAND.gray500}; }
+    .btn { display: inline-block; padding: 12px 28px; background: ${BRAND.primary}; color: ${BRAND.white}; text-decoration: none; border-radius: 50px; font-weight: 500; margin: 20px 0 10px; }
+    hr { border: none; border-top: 1px solid ${BRAND.gray200}; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>${BRAND.name}</h1>
+        <p>L'Art du Parfum d'Exception</p>
+      </div>
+      
+      <div class="content">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <span class="status-badge">${statusBadge.text}</span>
+          <h2 style="color: ${BRAND.gray800}; margin: 16px 0 4px; font-size: 22px;">Merci pour votre commande !</h2>
+          <p style="color: ${BRAND.gray500}; margin: 0;">Commande #${orderNumber}</p>
+        </div>
+
+        <div class="info-section">
+          <div class="info-row">
+            <span class="info-label">📅 Date</span>
+            <span class="info-value">${formatDate(order.createdAt)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">💳 Paiement</span>
+            <span class="info-value">${order.paymentMethod === 'cash_on_delivery' ? 'Paiement à la livraison' : 'Virement bancaire'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">🚚 Livraison</span>
+            <span class="info-value">${order.shippingCost === 0 ? 'Gratuite' : formatPrice(order.shippingCost)}</span>
+          </div>
+        </div>
+
+        <h3 style="color: ${BRAND.gray800}; margin: 0 0 12px;">📦 Récapitulatif</h3>
+        <table>
+          <tbody>
+            ${itemsList}
+          </tbody>
+        </table>
+
+        <div class="grand-total">
+          <div class="info-row" style="margin-bottom: 0;">
+            <span style="font-weight: 600; color: ${BRAND.gray800};">Total</span>
+            <span style="font-size: 20px; font-weight: 700; color: ${BRAND.primary};">${formatPrice(order.total)}</span>
+          </div>
+        </div>
+
+        <hr>
+
+        <div class="info-section" style="margin-top: 0;">
+          <h3 style="margin: 0 0 12px; font-size: 14px; color: ${BRAND.gray700};">📍 Livraison</h3>
+          <p style="margin: 0 0 4px; color: ${BRAND.gray700};"><strong>${order.customer.fullName}</strong></p>
+          <p style="margin: 0; color: ${BRAND.gray600}; font-size: 13px;">${order.customer.address}, ${order.customer.city} ${order.customer.postalCode || ''}</p>
+          <p style="margin: 8px 0 0; color: ${BRAND.gray600}; font-size: 13px;">📞 ${order.customer.phone}</p>
+        </div>
+
+        <div style="text-align: center;">
+          <a href="${process.env.SHOP_URL || 'https://wiqar-perfume.com'}" class="btn">Continuer mes achats</a>
+        </div>
+      </div>
+
+      <div class="footer">
+        <p><strong>${BRAND.name}</strong> — Parfums d'Exception depuis 2020</p>
+        <p>${ADMIN_EMAIL} • ${process.env.SHOP_URL || 'www.wiqar-perfume.com'}</p>
+        <p style="margin-top: 16px;">© ${new Date().getFullYear()} ${BRAND.name}. Tous droits réservés.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+};
+
+// ==================== ADMIN EMAIL TEMPLATE ====================
+const generateAdminEmailHTML = (order, orderNumber) => {
+  const itemsList = order.items.map(item => `
+    <tr style="border-bottom: 1px solid ${BRAND.gray200};">
+      <td style="padding: 10px 8px;">${item.name}</td>
+      <td style="padding: 10px 8px; text-align: center;">${item.selectedSize || '-'}</td>
+      <td style="padding: 10px 8px; text-align: center;">${item.quantity}</td>
+      <td style="padding: 10px 8px; text-align: right;">${formatPrice(item.price)}</td>
+      <td style="padding: 10px 8px; text-align: right;"><strong>${formatPrice(item.price * item.quantity)}</strong></td>
+    </tr>
+  `).join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Nouvelle commande - ${BRAND.name}</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+    .container { max-width: 700px; margin: 0 auto; background: white; border-radius: 16px; overflow: hidden; }
+    .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 20px 25px; color: white; }
+    .content { padding: 25px; }
+    .alert { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 15px; margin-bottom: 20px; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+    th { background: #1a1a2e; color: white; padding: 10px; text-align: left; }
+    td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+    .total-box { background: #f8fafc; padding: 15px; border-radius: 12px; margin-top: 20px; }
+    .order-info { background: #f1f5f9; padding: 15px; border-radius: 12px; margin-bottom: 20px; }
+    .btn { display: inline-block; padding: 10px 20px; background: ${BRAND.primary}; color: white; text-decoration: none; border-radius: 8px; }
+    hr { margin: 15px 0; border: none; border-top: 1px solid #e5e7eb; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 style="margin: 0;">🛍️ Nouvelle commande</h2>
+      <p style="margin: 5px 0 0; opacity: 0.8;">${orderNumber}</p>
+    </div>
+    
+    <div class="content">
+      <div class="alert">
+        ⚠️ <strong>Action requise</strong> — Veuillez traiter cette commande
+      </div>
+
+      <div class="order-info">
+        <h3 style="margin: 0 0 10px;">📋 Informations client</h3>
+        <p><strong>Nom:</strong> ${order.customer.fullName}</p>
+        <p><strong>Email:</strong> <a href="mailto:${order.customer.email}">${order.customer.email}</a></p>
+        <p><strong>Téléphone:</strong> ${order.customer.phone}</p>
+        <p><strong>Adresse:</strong> ${order.customer.address}, ${order.customer.city} ${order.customer.postalCode || ''}</p>
+        <p><strong>Paiement:</strong> ${order.paymentMethod === 'cash_on_delivery' ? '💰 Paiement à la livraison' : '🏦 Virement bancaire'}</p>
+        ${order.notes ? `<p><strong>Notes:</strong> ${order.notes}</p>` : ''}
+      </div>
+
+      <h3>📦 Articles commandés</h3>
+      <table>
+        <thead>
+          <tr><th>Produit</th><th>Taille</th><th>Qté</th><th>PU</th><th>Total</th></tr>
+        </thead>
+        <tbody>${itemsList}</tbody>
+      </table>
+
+      <div class="total-box">
+        <p><strong>Sous-total:</strong> ${formatPrice(order.subtotal)}</p>
+        <p><strong>Frais de livraison:</strong> ${order.shippingCost === 0 ? 'Gratuit' : formatPrice(order.shippingCost)}</p>
+        <hr>
+        <h3 style="margin: 10px 0 0;">Total: ${formatPrice(order.total)}</h3>
+      </div>
+
+      <p style="text-align: center; margin-top: 25px;">
+        <a href="${process.env.ADMIN_DASHBOARD_URL || 'https://admin.wiqar-perfume.com'}/orders/${order._id}" class="btn">📋 Voir dans l'administration</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+};
+
+// ==================== SEND EMAILS FUNCTION ====================
+const sendOrderEmails = async (order, orderNumber) => {
+  const customerEmail = {
+    to: order.customer.email,
+    from: FROM_EMAIL,
+    subject: `✨ Merci pour votre commande #${orderNumber} - ${BRAND.name}`,
+    html: generateCustomerEmailHTML(order, orderNumber),
+    text: `Merci pour votre commande #${orderNumber}. Total: ${formatPrice(order.total)}. Nous traiterons votre commande rapidement.`
+  };
+  
+  const adminEmail = {
+    to: ADMIN_EMAIL,
+    from: FROM_EMAIL,
+    subject: `🛍️ Nouvelle commande #${orderNumber} - ${formatPrice(order.total)}`,
+    html: generateAdminEmailHTML(order, orderNumber),
+    text: `Nouvelle commande! #${orderNumber} de ${order.customer.fullName}. Total: ${formatPrice(order.total)}`
+  };
+  
+  const results = await Promise.allSettled([
+    sgMail.send(customerEmail),
+    sgMail.send(adminEmail)
+  ]);
+  
+  results.forEach((result, index) => {
+    const emailType = index === 0 ? 'Customer' : 'Admin';
+    if (result.status === 'fulfilled') {
+      console.log(`✅ ${emailType} email sent for order ${orderNumber}`);
+    } else {
+      console.error(`❌ Failed to send ${emailType} email:`, result.reason);
+    }
+  });
+  
+  return results;
+};
+
+// ==================== GET ALL ORDERS ====================
 const getOrders = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -12,17 +300,9 @@ const getOrders = async (req, res) => {
     
     let query = {};
     
-    // Filter by status
-    if (req.query.status) {
-      query.orderStatus = req.query.status;
-    }
+    if (req.query.status) query.orderStatus = req.query.status;
+    if (req.query.paymentMethod) query.paymentMethod = req.query.paymentMethod;
     
-    // Filter by payment method
-    if (req.query.paymentMethod) {
-      query.paymentMethod = req.query.paymentMethod;
-    }
-    
-    // Search by order number or customer name/email
     if (req.query.search) {
       query.$or = [
         { orderNumber: { $regex: req.query.search, $options: 'i' } },
@@ -50,36 +330,26 @@ const getOrders = async (req, res) => {
   }
 };
 
-// @desc    Get single order by ID
-// @route   GET /api/orders/:id
-// @access  Private/Admin
+// ==================== GET ORDER BY ID ====================
 const getOrderById = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
     res.json(order);
-
   } catch (error) {
     res.status(500).json({ message: 'Error fetching order', error: error.message });
   }
 };
 
-// @desc    Get order by order number
-// @route   GET /api/orders/number/:orderNumber
-// @access  Public
+// ==================== GET ORDER BY NUMBER ====================
 const getOrderByNumber = async (req, res) => {
   try {
     const order = await Order.findOne({ orderNumber: req.params.orderNumber });
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    // Only return limited info for public access
     res.json({
       orderNumber: order.orderNumber,
       orderStatus: order.orderStatus,
@@ -95,15 +365,12 @@ const getOrderByNumber = async (req, res) => {
         price: item.price
       }))
     });
-
   } catch (error) {
     res.status(500).json({ message: 'Error fetching order', error: error.message });
   }
 };
 
-// @desc    Update order status
-// @route   PUT /api/orders/:id/status
-// @access  Private/Admin
+// ==================== UPDATE ORDER STATUS ====================
 const updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -114,14 +381,12 @@ const updateOrderStatus = async (req, res) => {
     }
 
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
     order.orderStatus = status;
     
-    // Add timestamps based on status
     if (status === 'confirmed') order.confirmedAt = Date.now();
     if (status === 'shipped') order.shippedAt = Date.now();
     if (status === 'delivered') order.deliveredAt = Date.now();
@@ -129,19 +394,13 @@ const updateOrderStatus = async (req, res) => {
     
     await order.save();
 
-    res.json({ 
-      message: 'Order status updated',
-      order 
-    });
-
+    res.json({ message: 'Order status updated', order });
   } catch (error) {
     res.status(500).json({ message: 'Error updating order', error: error.message });
   }
 };
 
-// @desc    Update payment status
-// @route   PUT /api/orders/:id/payment-status
-// @access  Private/Admin
+// ==================== UPDATE PAYMENT STATUS ====================
 const updatePaymentStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -152,7 +411,6 @@ const updatePaymentStatus = async (req, res) => {
     }
 
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
@@ -160,19 +418,13 @@ const updatePaymentStatus = async (req, res) => {
     order.paymentStatus = status;
     await order.save();
 
-    res.json({ 
-      message: 'Payment status updated',
-      order 
-    });
-
+    res.json({ message: 'Payment status updated', order });
   } catch (error) {
     res.status(500).json({ message: 'Error updating payment status', error: error.message });
   }
 };
 
-// @desc    Add tracking information
-// @route   PUT /api/orders/:id/tracking
-// @access  Private/Admin
+// ==================== ADD TRACKING INFORMATION ====================
 const addTrackingInfo = async (req, res) => {
   try {
     const { trackingNumber, shippingCarrier } = req.body;
@@ -182,7 +434,6 @@ const addTrackingInfo = async (req, res) => {
     }
 
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
@@ -190,7 +441,6 @@ const addTrackingInfo = async (req, res) => {
     order.trackingNumber = trackingNumber;
     order.shippingCarrier = shippingCarrier || 'Other';
     
-    // Auto-update status to shipped if tracking is added
     if (order.orderStatus === 'confirmed' || order.orderStatus === 'processing') {
       order.orderStatus = 'shipped';
       order.shippedAt = Date.now();
@@ -198,35 +448,25 @@ const addTrackingInfo = async (req, res) => {
     
     await order.save();
 
-    res.json({ 
-      message: 'Tracking information added',
-      order 
-    });
-
+    res.json({ message: 'Tracking information added', order });
   } catch (error) {
     res.status(500).json({ message: 'Error adding tracking info', error: error.message });
   }
 };
 
-// @desc    Get customer orders by email
-// @route   GET /api/orders/customer/:email
-// @access  Public
+// ==================== GET CUSTOMER ORDERS ====================
 const getCustomerOrders = async (req, res) => {
   try {
     const orders = await Order.find({ 'customer.email': req.params.email })
       .sort({ createdAt: -1 })
       .select('orderNumber orderStatus total orderDate items');
-
     res.json(orders);
-
   } catch (error) {
     res.status(500).json({ message: 'Error fetching orders', error: error.message });
   }
 };
 
-// @desc    Get order statistics
-// @route   GET /api/orders/stats/summary
-// @access  Public
+// ==================== GET ORDER STATISTICS ====================
 const getOrderStats = async (req, res) => {
   try {
     const totalOrders = await Order.countDocuments();
@@ -248,370 +488,65 @@ const getOrderStats = async (req, res) => {
       deliveredOrders,
       totalRevenue: revenue[0]?.total || 0
     });
-
   } catch (error) {
     res.status(500).json({ message: 'Error fetching stats', error: error.message });
   }
 };
 
-// @desc    Delete order
-// @route   DELETE /api/orders/:id
-// @access  Private/SuperAdmin
+// ==================== DELETE ORDER ====================
 const deleteOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
     await order.deleteOne();
     res.json({ message: 'Order deleted successfully' });
-
   } catch (error) {
     res.status(500).json({ message: 'Error deleting order', error: error.message });
   }
 };
 
-// @desc    Bulk delete orders
-// @route   DELETE /api/orders/bulk/delete
-// @access  Private/SuperAdmin
+// ==================== BULK DELETE ORDERS ====================
 const bulkDeleteOrders = async (req, res) => {
   try {
     const { orderIds } = req.body;
-
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
       return res.status(400).json({ message: 'Please provide order IDs' });
     }
-
     const result = await Order.deleteMany({ _id: { $in: orderIds } });
-
-    res.json({ 
-      message: `${result.deletedCount} orders deleted successfully`,
-      deletedCount: result.deletedCount
-    });
-
+    res.json({ message: `${result.deletedCount} orders deleted successfully`, deletedCount: result.deletedCount });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting orders', error: error.message });
   }
 };
 
-// @desc    Cancel order with reason
-// @route   PUT /api/orders/:id/cancel
-// @access  Private/SuperAdmin
+// ==================== CANCEL ORDER ====================
 const cancelOrder = async (req, res) => {
   try {
     const { reason } = req.body;
     const order = await Order.findById(req.params.id);
-
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
     if (order.orderStatus === 'delivered') {
       return res.status(400).json({ message: 'Cannot cancel delivered order' });
     }
-
     order.orderStatus = 'cancelled';
     order.cancelledAt = Date.now();
     order.cancellationReason = reason || 'Cancelled by admin';
-    
     await order.save();
-
-    res.json({ 
-      message: 'Order cancelled successfully',
-      order 
-    });
-
+    res.json({ message: 'Order cancelled successfully', order });
   } catch (error) {
     res.status(500).json({ message: 'Error cancelling order', error: error.message });
   }
 };
 
-
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
-// Email configuration
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@wiqar-perfume.com';
-const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@wiqar-perfume.com';
-
-// Helper function to format order number
-const formatOrderNumber = (orderNumber) => {
-  return orderNumber || 'Unknown Order';
-};
-
-// Helper function to format price
-const formatPrice = (price) => {
-  return new Intl.NumberFormat('tn-TN', { style: 'currency', currency: 'TND' }).format(price);
-};
-
-// Helper function to generate order summary HTML for customer
-const generateCustomerEmailHTML = (order, orderNumber) => {
-  const itemsList = order.items.map(item => `
-    <tr style="border-bottom: 1px solid #e5e7eb;">
-      <td style="padding: 12px; text-align: left;">${item.name}</td>
-      <td style="padding: 12px; text-align: center;">${item.quantity}</td>
-      <td style="padding: 12px; text-align: right;">${formatPrice(item.price)}</td>
-      <td style="padding: 12px; text-align: right;">${formatPrice(item.price * item.quantity)}</td>
-    </tr>
-  `).join('');
-
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Order Confirmation - WIQAR Perfumes</title>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9fafb; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; }
-        .header { text-align: center; padding: 20px 0; border-bottom: 3px solid #8C5A3C; }
-        .header h1 { color: #8C5A3C; margin: 0; font-size: 28px; }
-        .order-info { background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0; }
-        .order-details { margin: 20px 0; }
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-        th { background-color: #8C5A3C; color: white; padding: 12px; text-align: left; }
-        .total-row { font-weight: bold; border-top: 2px solid #e5e7eb; }
-        .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; border-top: 1px solid #e5e7eb; margin-top: 20px; }
-        .status { display: inline-block; padding: 5px 10px; border-radius: 5px; font-size: 12px; font-weight: bold; }
-        .status-pending { background-color: #fef3c7; color: #d97706; }
-        .customer-info { margin: 20px 0; padding: 15px; background-color: #f9fafb; border-radius: 8px; }
-        .button { display: inline-block; padding: 12px 24px; background-color: #8C5A3C; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>WIQAR Perfumes</h1>
-          <p>Order Confirmation</p>
-        </div>
-        
-        <div class="order-info">
-          <p><strong>Order Number:</strong> ${orderNumber}</p>
-          <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleString()}</p>
-          <p><strong>Order Status:</strong> <span class="status status-pending">${order.orderStatus.toUpperCase()}</span></p>
-          <p><strong>Payment Method:</strong> ${order.paymentMethod === 'cash_on_delivery' ? 'Cash on Delivery' : order.paymentMethod}</p>
-        </div>
-        
-        <div class="customer-info">
-          <h3>Shipping Information</h3>
-          <p><strong>Name:</strong> ${order.customer.fullName}</p>
-          <p><strong>Phone:</strong> ${order.customer.phone}</p>
-          <p><strong>Email:</strong> ${order.customer.email}</p>
-          <p><strong>Address:</strong> ${order.customer.address}</p>
-          <p><strong>City:</strong> ${order.customer.city}</p>
-          ${order.customer.postalCode ? `<p><strong>Postal Code:</strong> ${order.customer.postalCode}</p>` : ''}
-          ${order.notes ? `<p><strong>Order Notes:</strong> ${order.notes}</p>` : ''}
-        </div>
-        
-        <div class="order-details">
-          <h3>Order Summary</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Quantity</th>
-                <th>Unit Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsList}
-              <tr class="total-row">
-                <td colspan="3" style="padding: 12px; text-align: right; font-weight: bold;">Subtotal:</td>
-                <td style="padding: 12px; text-align: right;">${formatPrice(order.subtotal)}</td>
-              </tr>
-              <tr>
-                <td colspan="3" style="padding: 12px; text-align: right;">Shipping Cost:</td>
-                <td style="padding: 12px; text-align: right;">${formatPrice(order.shippingCost)}</td>
-              </tr>
-              <tr style="background-color: #f3f4f6;">
-                <td colspan="3" style="padding: 12px; text-align: right; font-weight: bold; font-size: 18px;">Total:</td>
-                <td style="padding: 12px; text-align: right; font-weight: bold; font-size: 18px; color: #8C5A3C;">${formatPrice(order.total)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        
-        <div style="text-align: center;">
-          <p>Thank you for shopping with WIQAR Perfumes!</p>
-          <p>We will process your order as soon as possible.</p>
-          <p>If you have any questions, please contact us at <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p>
-        </div>
-        
-        <div class="footer">
-          <p>© ${new Date().getFullYear()} WIQAR Perfumes. All rights reserved.</p>
-          <p>This is an automated message, please do not reply to this email.</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
-
-// Helper function to generate admin email HTML
-const generateAdminEmailHTML = (order, orderNumber) => {
-  const itemsList = order.items.map(item => `
-    <tr style="border-bottom: 1px solid #e5e7eb;">
-      <td style="padding: 12px; text-align: left;">${item.name}</td>
-      <td style="padding: 12px; text-align: center;">${item.quantity}</td>
-      <td style="padding: 12px; text-align: right;">${formatPrice(item.price)}</td>
-      <td style="padding: 12px; text-align: right;">${formatPrice(item.price * item.quantity)}</td>
-    </tr>
-  `).join('');
-
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>New Order Received - WIQAR Perfumes</title>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9fafb; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; }
-        .header { text-align: center; padding: 20px 0; border-bottom: 3px solid #10b981; }
-        .header h1 { color: #10b981; margin: 0; font-size: 28px; }
-        .alert { background-color: #fef3c7; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0; }
-        .order-info { background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0; }
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-        th { background-color: #374151; color: white; padding: 12px; text-align: left; }
-        .total-row { font-weight: bold; border-top: 2px solid #e5e7eb; }
-        .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; border-top: 1px solid #e5e7eb; margin-top: 20px; }
-        .button { display: inline-block; padding: 12px 24px; background-color: #8C5A3C; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>🛍️ New Order Received!</h1>
-          <p>A new order has been placed on WIQAR Perfumes</p>
-        </div>
-        
-        <div class="alert">
-          <p><strong>⚠️ ACTION REQUIRED:</strong> Please review and process this order.</p>
-        </div>
-        
-        <div class="order-info">
-          <p><strong>Order Number:</strong> ${orderNumber}</p>
-          <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleString()}</p>
-          <p><strong>Order Status:</strong> ${order.orderStatus}</p>
-          <p><strong>Payment Method:</strong> ${order.paymentMethod === 'cash_on_delivery' ? '💰 Cash on Delivery' : order.paymentMethod}</p>
-          <p><strong>Payment Status:</strong> ${order.paymentStatus}</p>
-        </div>
-        
-        <div class="customer-info">
-          <h3>👤 Customer Information</h3>
-          <p><strong>Name:</strong> ${order.customer.fullName}</p>
-          <p><strong>Phone:</strong> ${order.customer.phone}</p>
-          <p><strong>Email:</strong> <a href="mailto:${order.customer.email}">${order.customer.email}</a></p>
-          <p><strong>Address:</strong> ${order.customer.address}</p>
-          <p><strong>City:</strong> ${order.customer.city}</p>
-          ${order.customer.postalCode ? `<p><strong>Postal Code:</strong> ${order.customer.postalCode}</p>` : ''}
-          ${order.notes ? `<p><strong>Order Notes:</strong> ${order.notes}</p>` : ''}
-        </div>
-        
-        <div class="order-details">
-          <h3>📦 Order Summary</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Quantity</th>
-                <th>Unit Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsList}
-              <tr class="total-row">
-                <td colspan="3" style="padding: 12px; text-align: right; font-weight: bold;">Subtotal:</td>
-                <td style="padding: 12px; text-align: right;">${formatPrice(order.subtotal)}</td>
-              </tr>
-              <tr>
-                <td colspan="3" style="padding: 12px; text-align: right;">Shipping Cost:</td>
-                <td style="padding: 12px; text-align: right;">${formatPrice(order.shippingCost)}</td>
-              </tr>
-              <tr style="background-color: #f3f4f6;">
-                <td colspan="3" style="padding: 12px; text-align: right; font-weight: bold; font-size: 18px;">Total:</td>
-                <td style="padding: 12px; text-align: right; font-weight: bold; font-size: 18px; color: #10b981;">${formatPrice(order.total)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        
-        <div class="footer">
-          <p>© ${new Date().getFullYear()} WIQAR Perfumes - Admin Notification</p>
-          <p>This is an automated notification from your e-commerce platform.</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
-
-// Helper function to send emails
-const sendOrderEmails = async (order, orderNumber) => {
-  const customerEmailHTML = generateCustomerEmailHTML(order, orderNumber);
-  const adminEmailHTML = generateAdminEmailHTML(order, orderNumber);
-  
-  const customerEmail = {
-    to: order.customer.email,
-    from: FROM_EMAIL,
-    subject: `Order Confirmation #${orderNumber} - WIQAR Perfumes`,
-    html: customerEmailHTML,
-    text: `Thank you for your order #${orderNumber}! Total: ${formatPrice(order.total)}. We'll process your order soon.`
-  };
-  
-  const adminEmail = {
-    to: ADMIN_EMAIL,
-    from: FROM_EMAIL,
-    subject: `🛍️ New Order #${orderNumber} - ${formatPrice(order.total)}`,
-    html: adminEmailHTML,
-    text: `New order received! Order #${orderNumber} from ${order.customer.fullName}. Total: ${formatPrice(order.total)}`
-  };
-  
-  // Send both emails in parallel
-  const results = await Promise.allSettled([
-    sgMail.send(customerEmail),
-    sgMail.send(adminEmail)
-  ]);
-  
-  // Log results
-  results.forEach((result, index) => {
-    const emailType = index === 0 ? 'Customer' : 'Admin';
-    if (result.status === 'fulfilled') {
-      console.log(`✅ ${emailType} email sent successfully for order ${orderNumber}`);
-    } else {
-      console.error(`❌ Failed to send ${emailType} email for order ${orderNumber}:`, result.reason);
-    }
-  });
-  
-  return results;
-};
-
-// @desc    Create new order
-// @route   POST /api/orders
-// @access  Public
+// ==================== CREATE NEW ORDER ====================
 const createOrder = async (req, res) => {
   try {
-    const {
-      items,
-      customer,
-      subtotal,
-      shippingCost,
-      total,
-      paymentMethod,
-      notes
-    } = req.body;
+    const { items, customer, subtotal, shippingCost, total, paymentMethod, notes } = req.body;
 
-    console.log('=== CREATE ORDER DEBUG ===');
-    console.log('Order items count:', items?.length);
-    console.log('Customer email:', customer?.email);
-    console.log('Total amount:', total);
-
-    // Basic validation
     if (!items || items.length === 0) {
       return res.status(400).json({ message: 'No order items' });
     }
@@ -620,19 +555,17 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Please provide all required customer information' });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(customer.email)) {
       return res.status(400).json({ message: 'Please provide a valid email address' });
     }
 
-    // Generate order number manually
+    // Generate order number
     const date = new Date();
     const year = date.getFullYear().toString().slice(-2);
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const day = date.getDate().toString().padStart(2, '0');
     
-    // Find the last order created today
     const lastOrder = await Order.findOne({
       orderNumber: new RegExp(`ORD-${year}${month}${day}-`)
     }).sort({ orderNumber: -1 });
@@ -645,7 +578,6 @@ const createOrder = async (req, res) => {
     
     const orderNumber = `ORD-${year}${month}${day}-${sequence}`;
 
-    // Create order with generated order number
     const order = new Order({
       orderNumber,
       customer,
@@ -662,7 +594,7 @@ const createOrder = async (req, res) => {
     const createdOrder = await order.save();
     console.log(`✅ Order created successfully: ${orderNumber}`);
 
-    // ✨ SEND EMAILS (Non-blocking - will run in background)
+    // Send emails in background
     sendOrderEmails(createdOrder, orderNumber).catch(err => {
       console.error('Background email sending failed:', err);
     });
@@ -680,43 +612,26 @@ const createOrder = async (req, res) => {
 
   } catch (error) {
     console.error('Order creation error:', error);
-    res.status(500).json({ 
-      message: 'Error creating order', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error creating order', error: error.message });
   }
 };
 
-// @desc    Resend order confirmation email
-// @route   POST /api/orders/:id/resend-email
-// @access  Private/Admin
+// ==================== RESEND ORDER EMAIL ====================
 const resendOrderEmail = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-    
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-    
     await sendOrderEmails(order, order.orderNumber);
-    
-    res.json({ 
-      success: true, 
-      message: 'Order confirmation emails resent successfully' 
-    });
-    
+    res.json({ success: true, message: 'Order confirmation emails resent successfully' });
   } catch (error) {
     console.error('Email resend error:', error);
-    res.status(500).json({ 
-      message: 'Error resending emails', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error resending emails', error: error.message });
   }
 };
 
-// @desc    Test email configuration
-// @route   GET /api/orders/test-email
-// @access  Private/Admin
+// ==================== TEST EMAIL CONFIGURATION ====================
 const testEmailConfig = async (req, res) => {
   try {
     const testOrder = {
@@ -728,34 +643,25 @@ const testEmailConfig = async (req, res) => {
         address: 'Test Address',
         city: 'Test City'
       },
-      items: [
-        { name: 'Test Product', quantity: 1, price: 100 }
-      ],
+      items: [{ name: 'Test Product', quantity: 1, price: 100, selectedSize: '30ml' }],
       subtotal: 100,
       shippingCost: 10,
       total: 110,
       paymentMethod: 'cash_on_delivery',
       paymentStatus: 'pending',
       orderStatus: 'pending',
-      createdAt: new Date()
+      createdAt: new Date(),
+      notes: 'Test order - please ignore'
     };
-    
     await sendOrderEmails(testOrder, 'TEST-001');
-    
-    res.json({ 
-      success: true, 
-      message: 'Test email sent successfully' 
-    });
-    
+    res.json({ success: true, message: 'Test email sent successfully' });
   } catch (error) {
     console.error('Test email error:', error);
-    res.status(500).json({ 
-      message: 'Error sending test email', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error sending test email', error: error.message });
   }
 };
 
+// ==================== EXPORTS ====================
 module.exports = {
   createOrder,
   getOrders,
@@ -769,6 +675,6 @@ module.exports = {
   updatePaymentStatus,
   addTrackingInfo,
   cancelOrder,
-  resendOrderEmail,  
-  testEmailConfig    
+  resendOrderEmail,
+  testEmailConfig
 };
